@@ -31,6 +31,8 @@ SWS_INBOX="/Users/me/Scans" npm start
 
 Double-click `windows\Start Scanner.cmd`. It builds the app the first time, watches `Desktop\scan` (edit the one `set "SWS_INBOX=..."` line in the file if your scanner saves elsewhere), and opens the browser. Keep the window open while scanning.
 
+To update later, close the scanner and double-click `windows\Update Scanner.cmd`.
+
 For a taskbar icon, double-click `windows\Make Shortcut.cmd` once. It puts a Student Work Scanner shortcut on the Desktop; right-click it, choose Show more options, then Pin to taskbar.
 
 If `npm` refuses to run with a message about scripts being disabled, run this once in PowerShell: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
