@@ -21,8 +21,10 @@ export const api = Router()
 
 api.get('/events', (req, res) => subscribe(res))
 
+let build = 'dev'
+export function setBuild(b: string) { build = b }
 api.get('/status', (_req, res) => {
-  res.json({ ...watcherStatus(), lastSeen: watcherStatus().lastSeen ?? getMeta('lastSeen') })
+  res.json({ ...watcherStatus(), lastSeen: watcherStatus().lastSeen ?? getMeta('lastSeen'), build })
 })
 
 // ---------- Today ----------

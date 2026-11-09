@@ -11,7 +11,7 @@
     "dev": "concurrently -n server,web -c blue,magenta \"npm run dev:server\" \"npm run dev:web\"",
     "dev:server": "tsx watch --no-warnings=ExperimentalWarning server/index.ts",
     "dev:web": "vite --config web/vite.config.ts",
-    "build": "tsc -p server/tsconfig.json && vite build --config web/vite.config.ts",
+    "build": "tsc -p server/tsconfig.json && vite build --config web/vite.config.ts && node -e \"require('fs').writeFileSync('dist/web/build.txt', Date.now().toString())\"",
     "start": "node --no-warnings=ExperimentalWarning dist/server/index.js",
     "seed:demo": "tsx --no-warnings=ExperimentalWarning scripts/seed-demo.ts",
     "samples": "tsx --no-warnings=ExperimentalWarning scripts/make-samples.ts",

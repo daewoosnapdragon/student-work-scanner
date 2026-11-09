@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { ensureDirs, INBOX_DIR, PORT } from './config.js'
 import { openDb } from './db.js'
 import { startWatcher } from './watcher.js'
-import { api, files, print } from './routes/api.js'
+import { api, files, print, setBuild } from './routes/api.js'
 
 ensureDirs()
 openDb()
@@ -34,6 +34,10 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const webDist = [path.resolve(here, '../dist/web'), path.resolve(here, '../web')].find(
   (d) => fs.existsSync(path.join(d, 'index.html')) && fs.existsSync(path.join(d, 'assets')),
 )
+// The build this process started with. The page compares it with the build on
+// disk and says so when the program needs restarting after an update.
+export const BUILD = webDist && fs.existsSync(path.join(webDist, 'build.txt')) ? fs.readFileSync(path.join(webDist, 'build.txt'), 'utf8').trim() : 'dev'
+setBuild(BUILD)
 if (webDist) {
   app.use(express.static(webDist))
   app.get('/{*splat}', (_req, res) => res.sendFile(path.join(webDist, 'index.html')))

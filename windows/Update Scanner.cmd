@@ -1,8 +1,10 @@
 @echo off
 title Update Student Work Scanner
-rem Fetches the latest version, installs anything new, and rebuilds.
-rem Close the scanner window first if it is running.
+rem Fetches the latest version, installs anything new, rebuilds, and closes a
+rem running scanner so the next start runs the new version.
 cd /d "%~dp0.."
+echo Closing the scanner if it is running...
+taskkill /FI "WINDOWTITLE eq Student Work Scanner*" /T /F >nul 2>&1
 echo Updating...
 git pull || goto :fail
 call npm install || goto :fail
