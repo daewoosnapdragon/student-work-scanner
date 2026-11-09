@@ -19,13 +19,15 @@ import { sideLabel } from './codes.js'
 import type { Assignment, Packet, Student } from '../shared/types.js'
 
 export const DEFAULT_MODEL = 'claude-opus-5-5'
-export const DEFAULT_DOMAINS = ['Ideas and content', 'Organization', 'Language: grammar and vocabulary', 'Spelling and punctuation', 'Handwriting and presentation', 'Task completion']
+export const DEFAULT_DOMAINS = ['Ideas and content', 'Organization', 'Language: grammar and vocabulary', 'Spelling and punctuation', 'Task completion']
+// Dropped 2026-11-09: it rated the scan as much as the child. A saved list that still has it loses it.
+const RETIRED_DOMAINS = new Set(['handwriting and presentation'])
 export const LEVELS: Record<number, string> = { 4: 'Strong', 3: 'Secure', 2: 'Developing', 1: 'Beginning' }
 
 /** The domains every analysis rates, one per line in Settings. */
 export function domainList(): string[] {
   const raw = getMeta('domains')
-  const list = raw ? raw.split('\n').map((d) => d.trim()).filter(Boolean) : DEFAULT_DOMAINS
+  const list = (raw ? raw.split('\n').map((d) => d.trim()).filter(Boolean) : DEFAULT_DOMAINS).filter((d) => !RETIRED_DOMAINS.has(d.toLowerCase()))
   return list.length ? list : DEFAULT_DOMAINS
 }
 
