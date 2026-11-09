@@ -92,7 +92,12 @@ function PacketRows({ p, open, toggle }: { p: PacketRow; open: boolean; toggle: 
               </a>
             ))}
           </div>
-          {p.note && <div style={{ marginTop: 12 }}><div className="over quiet" style={{ fontSize: 10, marginBottom: 4 }}>Analysis</div><p className="small" style={{ margin: 0, whiteSpace: 'pre-wrap', maxWidth: 720 }}>{p.note}</p></div>}
+          {(p.note || p.feedback) && (
+            <div className="grid2" style={{ marginTop: 12, gap: 24 }}>
+              {p.note && <div><div className="over quiet" style={{ fontSize: 10, marginBottom: 4 }}>Analysis · for you</div><p className="small" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{p.note}</p></div>}
+              {p.feedback && <div><div className="over quiet" style={{ fontSize: 10, marginBottom: 4 }}>Feedback · for the student <a href={`/print/feedback/${p.assignment}/${p.student}`} target="_blank" rel="noreferrer" style={{ marginLeft: 8, letterSpacing: 0, textTransform: 'none' }}>print slip</a></div><p className="small" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{p.feedback}</p></div>}
+            </div>
+          )}
         </td></tr>
       )}
     </>

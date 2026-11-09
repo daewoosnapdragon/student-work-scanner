@@ -69,8 +69,10 @@ export interface Packet {
   lastAt: string
   score: number | null
   scoreOf: number | null
-  /** The analysis of this student's work on the assignment, pasted in or (later) written by the analysis step. */
+  /** The analysis of this student's work on the assignment, for the teacher. */
   note: string | null
+  /** Feedback written for the student to read, printed as a slip. */
+  feedback: string | null
 }
 
 export interface Guess {

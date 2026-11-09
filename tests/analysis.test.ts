@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classPrompt, splitClassAnswer } from '../server/analysis.js'
+import { classPrompt, splitClassAnswer, splitStudentSection } from '../server/analysis.js'
 
 const codes = ['4S18', '4S15', '4M27']
 
@@ -56,5 +56,28 @@ describe('the prompt', () => {
     expect(p).toContain('- 4S18  Lee Yoona  (3 pages)')
     expect(p).toContain('## 4S18 Lee Yoona')
     expect(p).toContain('## Class')
+  })
+})
+
+describe('splitting one student section into teacher and feedback parts', () => {
+  it('uses ### Teacher and ### Feedback headings', () => {
+    const r = splitStudentSection('### Teacher\nSecure on capitals.\nScore 3/4.\n### Feedback\nYoona, your letter has a real voice!\nNext time, try one contrast sentence.')
+    expect(r.teacher).toBe('Secure on capitals.\nScore 3/4.')
+    expect(r.feedback).toBe('Yoona, your letter has a real voice!\nNext time, try one contrast sentence.')
+  })
+  it('accepts "For Nipun:" and "Feedback:" with text on the same line', () => {
+    const r = splitStudentSection('Strong detail, weak punctuation.\n**For Nipun:** You used every section starter. Try adding question marks.')
+    expect(r.teacher).toBe('Strong detail, weak punctuation.')
+    expect(r.feedback).toBe('You used every section starter. Try adding question marks.')
+  })
+  it('is all for the teacher when nothing marks a feedback part', () => {
+    const r = splitStudentSection('Just notes.')
+    expect(r).toEqual({ teacher: 'Just notes.', feedback: null })
+  })
+  it('keeps the prompt asking for both parts', () => {
+    const p = classPrompt({ code: 'W04', title: 'T', klass: 'K', grade: 4, tags: '' }, [{ code: '4S18', name: 'Lee Yoona', pages: 3 }])
+    expect(p).toContain('### Teacher')
+    expect(p).toContain('### Feedback')
+    expect(p).toContain('grade 4')
   })
 })

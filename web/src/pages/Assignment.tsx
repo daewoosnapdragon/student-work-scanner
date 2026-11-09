@@ -51,6 +51,7 @@ export default function AssignmentPage() {
           <a className="btn primary" href={`/api/assignments/${a.code}/pdf?download=1`} title="Every student's pages, in name order, one PDF">Download class PDF</a>
           <CopyPrompt code={a.code} />
           <button className="btn" onClick={() => setPasting((v) => !v)} title="Paste Claude's whole answer once; it is split by student code">{pasting ? 'Cancel paste' : 'Paste class answer'}</button>
+          {inRows.some((r) => r.packet!.feedback) && <a className="btn" href={`/print/feedback/${a.code}`} target="_blank" rel="noreferrer" title="Every student's note, two slips to a page, to print and hand back with the work">Feedback slips</a>}
           <span className="muted small">Download the PDF, copy the prompt, give both to Claude, then paste the answer back here.</span>
         </section>
       )}
@@ -95,6 +96,7 @@ function PacketPanel({ s, a, onSaved }: { s: Row; a: Assignment; onSaved: () => 
   const [score, setScore] = useState(p.score != null ? String(p.score) : '')
   const [of, setOf] = useState(p.scoreOf != null ? String(p.scoreOf) : '10')
   const [note, setNote] = useState(p.note ?? '')
+  const [feedback, setFeedback] = useState(p.feedback ?? '')
   const [err, setErr] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [pages, setPages] = useState<Page[]>(s.pages)
@@ -127,7 +129,7 @@ function PacketPanel({ s, a, onSaved }: { s: Row; a: Assignment; onSaved: () => 
   async function save() {
     try {
       setErr(null)
-      await post(`/api/packets/${a.code}/${s.code}/score`, { score: score === '' ? null : Number(score), scoreOf: of === '' ? null : Number(of), note: note || null })
+      await post(`/api/packets/${a.code}/${s.code}/score`, { score: score === '' ? null : Number(score), scoreOf: of === '' ? null : Number(of), note: note || null, feedback })
       setSaved(true)
       onSaved()
     } catch (e) {
@@ -140,6 +142,7 @@ function PacketPanel({ s, a, onSaved }: { s: Row; a: Assignment; onSaved: () => 
         <div><Link to={`/students/${s.code}`} className="serif" style={{ fontSize: 22, fontWeight: 700, color: 'var(--ink)' }}>{s.name}</Link> <span className="muted small" style={{ marginLeft: 8 }}>{s.code} · {p.sides} of {p.expected} sides{p.closedIncomplete ? ', filed incomplete' : ''} · last page {fmtDate(p.lastAt)}</span></div>
         <div className="row">
           <a className="btn" href={`/api/packets/${a.code}/${s.code}/pdf?download=1`} title="This student's pages as one PDF">PDF</a>
+          {p.feedback && <a className="btn" href={`/print/feedback/${a.code}/${s.code}`} target="_blank" rel="noreferrer" title="The note to this student, as a slip to print or save as PDF">Feedback slip</a>}
           <Link className="btn" to={`/compare?assignment=${a.code}&left=${s.code}`}>Compare</Link>
         </div>
       </div>
@@ -167,9 +170,14 @@ function PacketPanel({ s, a, onSaved }: { s: Row; a: Assignment; onSaved: () => 
           {saved && <span className="muted small">Saved</span>}
           {err && <span className="err">{err}</span>}
         </div>
-        <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Analysis</span>
-          <textarea value={note} onChange={(e) => { setNote(e.target.value); setSaved(false) }} placeholder="What the work shows: paste Claude's answer for this student, or write your own." rows={note ? Math.min(14, note.split('\n').length + 2) : 3} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
-        </label>
+        <div className="grid2" style={{ gap: 16 }}>
+          <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Analysis · for you</span>
+            <textarea value={note} onChange={(e) => { setNote(e.target.value); setSaved(false) }} placeholder="What the work shows: paste Claude's answer for this student, or write your own." rows={Math.max(4, Math.min(14, Math.max(note.split('\n').length, feedback.split('\n').length) + 2))} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
+          </label>
+          <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Feedback · for {s.name.replace(/\s*\(.*\)\s*$/, '').split(' ').slice(-1)[0]}</span>
+            <textarea value={feedback} onChange={(e) => { setFeedback(e.target.value); setSaved(false) }} placeholder="The note the student reads. Warm, specific, their own words quoted. Printed as a slip." rows={Math.max(4, Math.min(14, Math.max(note.split('\n').length, feedback.split('\n').length) + 2))} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
+          </label>
+        </div>
       </form>
     </section>
   )
@@ -258,8 +266,8 @@ function PasteAnswer({ code, onDone }: { code: string; onDone: () => void }) {
   async function send() {
     try {
       setErr(null)
-      const r = await post<{ students: string[]; klass: boolean; unmatched: string[] }>(`/api/assignments/${code}/analysis/paste`, { text })
-      setResult(`Filed analysis for ${r.students.length} student${r.students.length === 1 ? '' : 's'}${r.klass ? ' and the class' : ''}.${r.unmatched.length ? ` Nothing found for ${r.unmatched.join(', ')}.` : ''}`)
+      const r = await post<{ students: string[]; withFeedback: number; klass: boolean; unmatched: string[] }>(`/api/assignments/${code}/analysis/paste`, { text })
+      setResult(`Filed analysis for ${r.students.length} student${r.students.length === 1 ? '' : 's'}${r.withFeedback ? `, feedback for ${r.withFeedback}` : ''}${r.klass ? ', and the class' : ''}.${r.unmatched.length ? ` Nothing found for ${r.unmatched.join(', ')}.` : ''}`)
       setTimeout(onDone, 1800)
     } catch (e) {
       setErr((e as Error).message)
@@ -268,8 +276,8 @@ function PasteAnswer({ code, onDone }: { code: string; onDone: () => void }) {
   return (
     <section className="card" style={{ gap: 10 }}>
       <div className="over quiet">Paste Claude's whole answer</div>
-      <div className="muted small">Each part that starts with a student's code goes to that student; a part headed Class goes to What the class shows. Anything already there for those students is replaced.</div>
-      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={12} placeholder={'## 4S18 Lee Yoona\n…\n\n## Class\n…'} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
+      <div className="muted small">Each part that starts with a student's code goes to that student, split into the Teacher part and the Feedback part; a part headed Class goes to What the class shows. Anything already there for those students is replaced.</div>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={12} placeholder={'## 4S18 Lee Yoona\n### Teacher\n…\n### Feedback\n…\n\n## Class\n…'} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
       <div className="row"><button className="btn primary" disabled={!text.trim()} onClick={() => void send()}>File it</button>{result && <span className="small">{result}</span>}{err && <span className="err">{err}</span>}</div>
     </section>
   )

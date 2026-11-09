@@ -6,13 +6,13 @@ import {
   allPackets, expectedFor, findStudentsByName, getAssignment, getPacket, getStudent, listAssignments, listStudents,
   packetPages, packetsForAssignment, packetsForStudent, pagesForStudent, pagesSince, recentPages, reviewPages,
   setPacketScore, upsertAssignment, upsertStudent, closePacketIncomplete, getPage, getMeta, sidesFor, deleteAssignment,
-  refreshPacketsFor, setAssignmentAnalysis,
+  refreshPacketsFor, setAssignmentAnalysis, setPacketFeedback,
 } from '../db.js'
 import { subscribe } from '../events.js'
 import { guessesFor } from '../guesses.js'
 import { abs, fileFromReview, reorderPacket, skipAllInReview, skipFromReview, stalePackets, unfilePage } from '../pipeline.js'
 import { buildPdf } from '../pdf.js'
-import { classPrompt, splitClassAnswer } from '../analysis.js'
+import { classPrompt, splitClassAnswer, splitStudentSection } from '../analysis.js'
 import { watcherStatus } from '../watcher.js'
 import { formatCode, sideLabel } from '../codes.js'
 import type { Assignment, ReviewItem, Side, Student } from '../../shared/types.js'
@@ -170,14 +170,17 @@ api.post('/assignments/:code/analysis/paste', (req, res) => {
   const packets = packetsForAssignment(code)
   const { byStudent, klass } = splitClassAnswer(text, packets.map((p) => p.student))
   const filed: string[] = []
+  let withFeedback = 0
   for (const [student, body] of byStudent) {
     const pk = packets.find((p) => p.student === student)
     if (!pk) continue
-    setPacketScore(student, code, pk.score, pk.scoreOf, body)
+    const parts = splitStudentSection(body)
+    setPacketScore(student, code, pk.score, pk.scoreOf, parts.teacher ?? body)
+    if (parts.feedback) { setPacketFeedback(student, code, parts.feedback); withFeedback++ }
     filed.push(student)
   }
   if (klass) setAssignmentAnalysis(code, klass)
-  res.json({ students: filed, klass: !!klass, unmatched: packets.filter((p) => !byStudent.has(p.student)).map((p) => p.student) })
+  res.json({ students: filed, withFeedback, klass: !!klass, unmatched: packets.filter((p) => !byStudent.has(p.student)).map((p) => p.student) })
 })
 
 api.get('/assignments/:code/prompt', (req, res) => {
@@ -272,6 +275,7 @@ api.post('/packets/:assignment/:student/score', (req, res) => {
   if (!getPacket(student, assignment)) return res.status(404).json({ error: 'no such packet' })
   const b = req.body ?? {}
   setPacketScore(student, assignment, b.score == null ? null : Number(b.score), b.scoreOf == null ? null : Number(b.scoreOf), b.note ?? null)
+  if (b.feedback !== undefined) setPacketFeedback(student, assignment, typeof b.feedback === 'string' && b.feedback.trim() ? b.feedback.trim() : null)
   res.json(getPacket(student, assignment))
 })
 
@@ -410,11 +414,61 @@ h1{font-size:14px;margin:0 0 6mm}
 <div class="grid">${labels.join('')}</div></body></html>`)
 })
 
+// Feedback slips: the note to each student, two to an A4 page with a cut line,
+// or one a page with ?per=1. Use the browser's print dialog to print or save as PDF.
+print.get('/feedback/:assignment{/:student}', (req, res) => {
+  const a = getAssignment(req.params.assignment.toUpperCase())
+  if (!a) return res.status(404).send('no such assignment')
+  const only = typeof req.params.student === 'string' ? req.params.student.toUpperCase() : null
+  const per = req.query.per === '1' ? 1 : 2
+  const packets = packetsForAssignment(a.code).filter((p) => p.feedback && (!only || p.student === only))
+  const rows = packets.map((p) => ({ p, s: getStudent(p.student) })).sort((x, y) => (x.s?.name ?? '').localeCompare(y.s?.name ?? ''))
+  if (!rows.length) return res.status(404).send(only ? 'No feedback written for this student yet.' : 'No feedback written for this assignment yet.')
+  const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+  const first = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
+  const slips = rows.map(({ p, s }) => `<section class="slip">
+    <header><div><div class="over">${esc(a.klass)}${a.grade != null ? ` · Grade ${a.grade}` : ''} · ${esc(date)}</div><h1>${esc(s?.name ? first(s.name) : p.student)}${s?.nameKo ? ` <span class="ko">${esc(s.nameKo)}</span>` : ''}</h1></div><div class="right"><div class="over">${esc(a.code)}</div><div class="title">${esc(a.title)}</div></div></header>
+    <div class="body">${p.feedback!.split(/\n{2,}/).map((para) => `<p>${esc(para).replace(/\n/g, '<br>')}</p>`).join('')}</div>
+    <footer><span>${p.score != null ? `Score ${p.score}${p.scoreOf != null ? ` of ${p.scoreOf}` : ''}` : ''}</span><span>Keep this with your work</span></footer>
+  </section>`)
+  res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Feedback · ${esc(a.code)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+KR:wght@400;500&display=swap" rel="stylesheet">
+<style>
+@page{size:A4;margin:0}
+body{margin:0;font-family:'IBM Plex Sans','Noto Sans KR',system-ui,sans-serif;color:#1f1b17;background:#fff}
+.page{width:210mm;height:297mm;box-sizing:border-box;padding:12mm 14mm;display:grid;grid-template-rows:repeat(${per},1fr);gap:0;page-break-after:always;position:relative}
+.page:last-child{page-break-after:auto}
+.slip{box-sizing:border-box;padding:6mm 2mm;display:flex;flex-direction:column;gap:4mm;position:relative}
+.slip+.slip{border-top:1px dashed #cfc5b4}
+header{display:flex;justify-content:space-between;align-items:flex-end;gap:8mm;border-bottom:2px solid #8b1e1e;padding-bottom:3mm}
+.over{font-size:9.5pt;letter-spacing:.14em;text-transform:uppercase;color:#8b1e1e;font-weight:600}
+h1{font-family:'Playfair Display',Georgia,serif;font-size:22pt;margin:1mm 0 0;line-height:1.1}
+.ko{font-family:'Noto Sans KR',sans-serif;font-size:13pt;font-weight:500;color:#6b6259;margin-left:2mm}
+.right{text-align:right}.title{font-size:11pt;color:#3b342d}
+.body{font-size:${per === 1 ? '13pt' : '11.5pt'};line-height:1.6;flex:1}
+.body p{margin:0 0 2.5mm}
+footer{display:flex;justify-content:space-between;font-size:9pt;color:#6b6259;border-top:1px solid #e6ddcf;padding-top:2mm}
+.bar{position:fixed;top:0;left:0;right:0;background:#1f1b17;color:#fff;padding:8px 14px;font-size:13px;display:flex;gap:14px;align-items:center;z-index:9}
+.bar button{font:inherit;background:#8b1e1e;color:#fff;border:0;border-radius:3px;padding:5px 12px;cursor:pointer}
+@media print{.bar{display:none}}
+@media screen{body{background:#e6e3db}.page{background:#fff;margin:48px auto 16px;box-shadow:0 1px 4px rgba(0,0,0,.15)}}
+</style></head><body>
+<div class="bar"><button onclick="window.print()">Print, or save as PDF</button><span>${rows.length} slip${rows.length === 1 ? '' : 's'} · ${per} a page</span><a style="color:#fff" href="?per=${per === 1 ? 2 : 1}">${per === 1 ? 'Two a page' : 'One a page'}</a></div>
+${chunk(slips, per).map((g) => `<div class="page">${g.join('')}</div>`).join('')}
+</body></html>`)
+})
+
 print.get('/code/:student/:assignment/:page/:side.svg', async (req, res) => {
   const { student, assignment, page, side } = req.params
   const code = formatCode({ student: student.toUpperCase(), assignment: assignment.toUpperCase(), page: Number(page), side: side.toLowerCase() as Side })
   res.type('image/svg+xml').send(await QRCode.toString(code, { type: 'svg', margin: 1, errorCorrectionLevel: 'H' }))
 })
+
+function chunk<T>(xs: T[], n: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n))
+  return out
+}
 
 function esc(s: string) {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)

@@ -20,13 +20,15 @@
     "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.6.0",
     "chokidar": "^4.0.3",
     "express": "^5.1.0",
     "jsqr": "^1.4.0",
     "mupdf": "^1.28.1",
     "pdf-lib": "^1.17.1",
     "qrcode": "^1.5.4",
-    "sharp": "^0.34.3"
+    "sharp": "^0.34.3",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",

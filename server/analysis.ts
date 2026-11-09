@@ -3,6 +3,31 @@
 // code (a heading, a bold label, or just the code and a name); whatever
 // comes before the first code, or under a heading that says Class, is the
 // class's own section.
+export interface StudentParts { teacher: string | null; feedback: string | null }
+
+// Inside one student's section: the part for the teacher and the part written
+// to the student, split at a line such as "### Feedback", "**For Nipun:**" or
+// "Feedback:". Without such a line the whole section is for the teacher.
+const FEEDBACK_LINE = /^(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:feedback|for the student|to the student|student feedback|for\s+[A-Za-z][\w .'-]{0,40}|dear\s+[A-Za-z][\w .'-]{0,40})\s*:?\s*(?:\*\*|__)?\s*:?\s*(.*)$/i
+const TEACHER_LINE = /^(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:teacher|for the teacher|analysis|teacher notes?)\s*:?\s*(?:\*\*|__)?\s*:?\s*(.*)$/i
+
+export function splitStudentSection(body: string): StudentParts {
+  const lines = body.split('\n')
+  const teacher: string[] = []
+  const feedback: string[] = []
+  let into: 'teacher' | 'feedback' = 'teacher'
+  for (const raw of lines) {
+    const line = raw.trim()
+    const fb = FEEDBACK_LINE.exec(line)
+    if (fb && line.length < 120) { into = 'feedback'; if (fb[1]?.trim()) feedback.push(fb[1].trim()); continue }
+    const tc = TEACHER_LINE.exec(line)
+    if (tc && line.length < 120) { into = 'teacher'; if (tc[1]?.trim()) teacher.push(tc[1].trim()); continue }
+    ;(into === 'teacher' ? teacher : feedback).push(raw)
+  }
+  const t = teacher.join('\n').trim(), f = feedback.join('\n').trim()
+  return { teacher: t || null, feedback: f || null }
+}
+
 export function splitClassAnswer(text: string, codes: string[]): { byStudent: Map<string, string>; klass: string | null } {
   const known = new Set(codes.map((c) => c.toUpperCase()))
   const lines = text.replace(/\r\n?/g, '\n').split('\n')
@@ -52,17 +77,23 @@ export function classPrompt(a: { code: string; title: string; klass: string; gra
     'Students, in the order they appear:',
     ...students.map((s) => `- ${s.code}  ${s.name}  (${s.pages} page${s.pages === 1 ? '' : 's'})`),
     '',
-    'Please read every page and write, for each student, 3 to 6 sentences on what the work shows: what is secure, what is developing, one specific thing to teach or praise next, and a score if the work can be scored. Quote or describe the actual writing where it helps.',
+    'Please read every page and write two things for each student.',
+    '',
+    '1. For the teacher: 3 to 6 sentences on what the work shows. What is secure, what is developing, one specific thing to teach or praise next, and a score if the work can be scored. Quote or describe the actual writing where it helps.',
+    `2. For the student: 3 to 5 short sentences the child reads themselves${a.grade != null ? `, pitched at grade ${a.grade}` : ''}. Warm and specific. Name one thing they did well, quoting their own words, and one thing to try next time. No grades or scores in this part. Address them by their first name.`,
     '',
     'Format the answer exactly like this, so it can be filed by code:',
     '',
     `## ${students[0]?.code ?? '3D07'} ${students[0]?.name ?? 'Student Name'}`,
-    '(that student\'s analysis)',
+    '### Teacher',
+    '(the notes for the teacher)',
+    '### Feedback',
+    '(the note to the student)',
     '',
     '## Class',
     '(what the whole class shows: shared strengths, the common gaps, and what to teach next)',
     '',
-    'Use one "## CODE Name" heading per student, every student, in the order above, and the "## Class" heading last.',
+    'Use one "## CODE Name" heading per student, every student, in the order above, with "### Teacher" and "### Feedback" inside each, and the "## Class" heading last.',
   ]
   return lines.join('\n')
 }
