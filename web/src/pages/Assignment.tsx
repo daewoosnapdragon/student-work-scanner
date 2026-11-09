@@ -256,7 +256,7 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings }: {
           <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Analysis · for you</span>
             <textarea value={note} onChange={(e) => { setNote(e.target.value); setSaved(false) }} placeholder="What the work shows: paste Claude's answer for this student, or write your own." rows={Math.max(4, Math.min(14, Math.max(note.split('\n').length, feedback.split('\n').length) + 2))} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
           </label>
-          <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Feedback · for {s.name.replace(/\s*\(.*\)\s*$/, '').split(' ').slice(-1)[0]}</span>
+          <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Feedback · for {/\(([^)]+)\)\s*$/.exec(s.name)?.[1] ?? s.name}</span>
             <textarea value={feedback} onChange={(e) => { setFeedback(e.target.value); setSaved(false) }} placeholder="The note the student reads. Warm, specific, their own words quoted. Printed as a slip." rows={Math.max(4, Math.min(14, Math.max(note.split('\n').length, feedback.split('\n').length) + 2))} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
           </label>
         </div>
