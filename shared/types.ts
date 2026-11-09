@@ -75,6 +75,23 @@ export interface Packet {
   feedback: string | null
   /** When the analysis step last read this packet; null if never. */
   analysedAt: string | null
+  /** The fix-it table on the student's slip, as JSON: [{ wrote, better, why }]. */
+  corrections: string | null
+}
+
+export interface Correction { wrote: string; better: string; why: string | null }
+export function parseCorrections(raw: string | null | undefined): Correction[] {
+  if (!raw) return []
+  try { const v = JSON.parse(raw); return Array.isArray(v) ? v.filter((c) => c && typeof c.wrote === 'string' && typeof c.better === 'string').map((c) => ({ wrote: c.wrote, better: c.better, why: c.why ?? null })) : [] } catch { return [] }
+}
+/** "you wrote → better — why" lines, the shape the teacher types and the pasted answer uses. */
+export function parseCorrectionLines(text: string): Correction[] {
+  const out: Correction[] = []
+  for (const raw of text.split('\n')) {
+    const m = /^[-*•]?\s*(.+?)\s*(?:→|->|=>|⇒)\s*(.+?)(?:\s+[—–]\s*(.+)|\s+-\s+(.+))?\s*$/.exec(raw.trim().replace(/\*\*|__/g, ''))
+    if (m) out.push({ wrote: m[1].trim().replace(/^["“]|["”]$/g, ''), better: m[2].trim().replace(/^["“]|["”]$/g, ''), why: (m[3] ?? m[4])?.trim() || null })
+  }
+  return out
 }
 
 export interface Guess {

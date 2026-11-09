@@ -14,7 +14,8 @@ import { abs, fileFromReview, reorderPacket, skipAllInReview, skipFromReview, st
 import { buildPdf } from '../pdf.js'
 import { classPrompt, splitClassAnswer, splitStudentSection } from '../analysis.js'
 import { enqueueAssignment, enqueueClass, enqueuePacket, getSettings, queueStatus, saveSettings, testKey, domainList, LEVELS } from '../claude.js'
-import { skillsForStudent, skillsForAssignment, domainsForAssignment, domainsForStudent, replaceDomains } from '../db.js'
+import { skillsForStudent, skillsForAssignment, domainsForAssignment, domainsForStudent, replaceDomains, setPacketCorrections } from '../db.js'
+import { parseCorrectionLines, parseCorrections } from '../../shared/types.js'
 import { watcherStatus } from '../watcher.js'
 import { formatCode, sideLabel } from '../codes.js'
 import type { Assignment, ReviewItem, Side, Student } from '../../shared/types.js'
@@ -194,6 +195,7 @@ api.post('/assignments/:code/analysis/paste', (req, res) => {
     setPacketScore(student, code, pk.score, pk.scoreOf, parts.teacher ?? body)
     if (parts.feedback) { setPacketFeedback(student, code, parts.feedback); withFeedback++ }
     if (parts.domains.length) replaceDomains(student, code, parts.domains, pk.lastAt)
+    if (parts.corrections.length) setPacketCorrections(student, code, parts.corrections)
     filed.push(student)
   }
   if (klass) setAssignmentAnalysis(code, klass)
@@ -294,6 +296,7 @@ api.post('/packets/:assignment/:student/score', (req, res) => {
   const b = req.body ?? {}
   setPacketScore(student, assignment, b.score == null ? null : Number(b.score), b.scoreOf == null ? null : Number(b.scoreOf), b.note ?? null)
   if (b.feedback !== undefined) setPacketFeedback(student, assignment, typeof b.feedback === 'string' && b.feedback.trim() ? b.feedback.trim() : null)
+  if (b.corrections !== undefined) setPacketCorrections(student, assignment, typeof b.corrections === 'string' ? parseCorrectionLines(b.corrections) : Array.isArray(b.corrections) ? b.corrections : null)
   res.json(getPacket(student, assignment))
 })
 
@@ -482,14 +485,15 @@ print.get('/feedback/:assignment{/:student}', (req, res) => {
   if (!a) return res.status(404).send('no such assignment')
   const only = typeof req.params.student === 'string' ? req.params.student.toUpperCase() : null
   const per = req.query.per === '1' ? 1 : 2
-  const packets = packetsForAssignment(a.code).filter((p) => p.feedback && (!only || p.student === only))
+  const packets = packetsForAssignment(a.code).filter((p) => (p.feedback || parseCorrections(p.corrections).length) && (!only || p.student === only))
   const rows = packets.map((p) => ({ p, s: getStudent(p.student) })).sort((x, y) => (x.s?.name ?? '').localeCompare(y.s?.name ?? ''))
   if (!rows.length) return res.status(404).send(only ? 'No feedback written for this student yet.' : 'No feedback written for this assignment yet.')
   const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
   const first = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
   const slips = rows.map(({ p, s }) => `<section class="slip">
     <header><div><div class="over">${esc(a.klass)}${a.grade != null ? ` · Grade ${a.grade}` : ''} · ${esc(date)}</div><h1>${esc(s?.name ? first(s.name) : p.student)}${s?.nameKo ? ` <span class="ko">${esc(s.nameKo)}</span>` : ''}</h1></div><div class="right"><div class="over">${esc(a.code)}</div><div class="title">${esc(a.title)}</div></div></header>
-    <div class="body">${p.feedback!.split(/\n{2,}/).map((para) => `<p>${esc(para).replace(/\n/g, '<br>')}</p>`).join('')}</div>
+    <div class="body">${(p.feedback ?? '').split(/\n{2,}/).map((para) => `<p>${esc(para).replace(/\n/g, '<br>')}</p>`).join('')}</div>
+    ${fixitTable(parseCorrections(p.corrections), (a.grade ?? s?.grade ?? 3) <= 2)}
     <footer><span>${p.score != null ? `Score ${p.score}${p.scoreOf != null ? ` of ${p.scoreOf}` : ''}` : ''}</span><span>Keep this with your work</span></footer>
   </section>`)
   res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Feedback · ${esc(a.code)}</title>
@@ -508,6 +512,13 @@ h1{font-family:'Playfair Display',Georgia,serif;font-size:22pt;margin:1mm 0 0;li
 .right{text-align:right}.title{font-size:11pt;color:#3b342d}
 .body{font-size:${per === 1 ? '13pt' : '11.5pt'};line-height:1.6;flex:1}
 .body p{margin:0 0 2.5mm}
+.fix{width:100%;border-collapse:collapse;margin-top:2mm;font-size:${per === 1 ? '11.5pt' : '10pt'}}
+.fix caption{text-align:left;font-size:9.5pt;letter-spacing:.14em;text-transform:uppercase;color:#8b1e1e;font-weight:600;padding:0 0 1.5mm}
+.fix th{font-size:8.5pt;letter-spacing:.08em;text-transform:uppercase;color:#6b6259;text-align:left;font-weight:600;padding:1.2mm 2mm;border-bottom:1px solid #d9d0c1}
+.fix td{padding:1.6mm 2mm;border-bottom:1px solid #e6ddcf;vertical-align:top}
+.fix .w{color:#8b1e1e;text-decoration:line-through;text-decoration-color:rgba(139,30,30,.5)}
+.fix .b{font-weight:600;color:#2f7d4f}
+.fix .y{color:#3b342d}
 footer{display:flex;justify-content:space-between;font-size:9pt;color:#6b6259;border-top:1px solid #e6ddcf;padding-top:2mm}
 .bar{position:fixed;top:0;left:0;right:0;background:#1f1b17;color:#fff;padding:8px 14px;font-size:13px;display:flex;gap:14px;align-items:center;z-index:9}
 .bar button{font:inherit;background:#8b1e1e;color:#fff;border:0;border-radius:3px;padding:5px 12px;cursor:pointer}
@@ -580,6 +591,12 @@ print.get('/code/:student/:assignment/:page/:side.svg', async (req, res) => {
   const code = formatCode({ student: student.toUpperCase(), assignment: assignment.toUpperCase(), page: Number(page), side: side.toLowerCase() as Side })
   res.type('image/svg+xml').send(await QRCode.toString(code, { type: 'svg', margin: 1, errorCorrectionLevel: 'H' }))
 })
+
+function fixitTable(rows: Array<{ wrote: string; better: string; why: string | null }>, young: boolean): string {
+  if (!rows.length) return ''
+  const withWhy = !young && rows.some((r) => r.why)
+  return `<table class="fix"><caption>Fix it</caption><thead><tr><th>You wrote</th><th>Try</th>${withWhy ? '<th>Why</th>' : ''}</tr></thead><tbody>${rows.map((r) => `<tr><td class="w">${esc(r.wrote)}</td><td class="b">${esc(r.better)}</td>${withWhy ? `<td class="y">${esc(r.why ?? '')}</td>` : ''}</tr>`).join('')}</tbody></table>`
+}
 
 function chunk<T>(xs: T[], n: number): T[][] {
   const out: T[][] = []

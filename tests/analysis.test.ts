@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { classPrompt, splitClassAnswer, splitStudentSection } from '../server/analysis.js'
+import { parseCorrectionLines } from '../shared/types.js'
 
 const codes = ['4S18', '4S15', '4M27']
 
@@ -72,7 +73,7 @@ describe('splitting one student section into teacher and feedback parts', () => 
   })
   it('is all for the teacher when nothing marks a feedback part', () => {
     const r = splitStudentSection('Just notes.')
-    expect(r).toEqual({ teacher: 'Just notes.', feedback: null, domains: [] })
+    expect(r).toEqual({ teacher: 'Just notes.', feedback: null, domains: [], corrections: [] })
   })
   it('keeps the prompt asking for both parts', () => {
     const p = classPrompt({ code: 'W04', title: 'T', klass: 'K', grade: 4, tags: '' }, [{ code: '4S18', name: 'Lee Yoona', pages: 3 }])
@@ -112,5 +113,34 @@ Nipun, lovely voice!
     const p = classPrompt({ code: 'W04', title: 'T', klass: 'K', grade: 4, tags: '' }, [{ code: '4S18', name: 'Lee Yoona', pages: 3 }], domains)
     expect(p).toContain('### Domains')
     expect(p).toContain('- Ideas and content: 3')
+  })
+})
+
+describe('the fix-it table', () => {
+  it('reads arrow lines with and without a why, in several spellings', () => {
+    expect(parseCorrectionLines(`- did you became → did you become — after "did", the verb stays plain
+* were do you live -> where do you live - "where" asks about a place
+ur → our
+**rember** => **remember** – two m sounds`)).toEqual([
+      { wrote: 'did you became', better: 'did you become', why: 'after "did", the verb stays plain' },
+      { wrote: 'were do you live', better: 'where do you live', why: '"where" asks about a place' },
+      { wrote: 'ur', better: 'our', why: null },
+      { wrote: 'rember', better: 'remember', why: 'two m sounds' },
+    ])
+  })
+  it('comes out of a student section under ### Fix-it, leaving the other parts alone', () => {
+    const r = splitStudentSection(`### Teacher
+Fine.
+### Feedback
+Jayana, great middle part!
+### Fix-it
+- were → where — asks about a place
+- i → I — the word I is always a capital`)
+    expect(r.feedback).toBe('Jayana, great middle part!')
+    expect(r.corrections).toHaveLength(2)
+    expect(r.corrections[1]).toEqual({ wrote: 'i', better: 'I', why: 'the word I is always a capital' })
+  })
+  it('is asked for in the prompt', () => {
+    expect(classPrompt({ code: 'W04', title: 'T', klass: 'K', grade: 4, tags: '' }, [{ code: '4S18', name: 'Lee Yoona', pages: 3 }])).toContain('### Fix-it')
   })
 })

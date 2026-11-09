@@ -11,7 +11,7 @@ import { z } from 'zod'
 import sharp from 'sharp'
 import {
   getAssignment, getMeta, getPacket, getStudent, packetPages, packetsForAssignment, setAssignmentAnalysis, setMeta,
-  setPacketFeedback, setPacketScore, replaceSkills, markAnalysed, replaceDomains,
+  setPacketFeedback, setPacketScore, replaceSkills, markAnalysed, replaceDomains, setPacketCorrections,
 } from './db.js'
 import { abs } from './pipeline.js'
 import { broadcast } from './events.js'
@@ -80,6 +80,11 @@ const PacketResult = z.object({
     evidence: z.string().describe('One phrase from the page that shows it.'),
   })).describe('The 3 to 7 skills this work gives evidence for.'),
   incomplete: z.boolean().describe('True when a side is blank or the work stops partway.'),
+  corrections: z.array(z.object({
+    wrote: z.string().describe("Exactly what the student wrote, copied from the page, a few words at most."),
+    better: z.string().describe('The corrected words.'),
+    why: z.string().describe('The rule in one short sentence a child understands: "after did, the verb stays plain".'),
+  })).describe('The fix-it table on the student\'s slip: the 3 to 6 mistakes most worth fixing, only ones actually on the page, the most important first. Up to 3 for grades 1 and 2. Spelling, grammar, punctuation, capitals, word choice. Empty if the work has nothing worth correcting.'),
 })
 export type PacketResultT = z.infer<typeof PacketResult> & { domains: Array<{ domain: string; level: number; note: string }> }
 
@@ -143,6 +148,7 @@ export async function analysePacket(student: string, assignment: string): Promis
   if (!out) throw new Error('Claude answered in a shape that could not be read; try again')
   setPacketScore(student, assignment, out.score, out.scoreOf, out.teacher)
   setPacketFeedback(student, assignment, out.feedback)
+  setPacketCorrections(student, assignment, out.corrections.slice(0, (a.grade ?? s.grade ?? 3) <= 2 ? 3 : 6))
   replaceSkills(student, assignment, out.skills.map((k) => ({ ...k, at: pk.lastAt })))
   replaceDomains(student, assignment, out.domains, pk.lastAt)
   markAnalysed(student, assignment)

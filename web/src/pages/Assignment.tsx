@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { post, useFetch, fmtDate, fileUrl, sideLabel, type Assignment, type Packet, type Page, type Student } from '../api'
+import { parseCorrectionLines, parseCorrections } from '../../../shared/types'
 
 interface Row extends Student { packet: Packet | null; pages: Page[] }
 interface Rating { student: string; assignment: string; domain: string; level: number; note: string | null }
@@ -164,6 +165,7 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings }: {
   const [of, setOf] = useState(p.scoreOf != null ? String(p.scoreOf) : '10')
   const [note, setNote] = useState(p.note ?? '')
   const [feedback, setFeedback] = useState(p.feedback ?? '')
+  const [fixit, setFixit] = useState(parseCorrections(p.corrections).map((c) => `${c.wrote} → ${c.better}${c.why ? ` — ${c.why}` : ''}`).join('\n'))
   const [err, setErr] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [pages, setPages] = useState<Page[]>(s.pages)
@@ -196,7 +198,7 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings }: {
   async function save() {
     try {
       setErr(null)
-      await post(`/api/packets/${a.code}/${s.code}/score`, { score: score === '' ? null : Number(score), scoreOf: of === '' ? null : Number(of), note: note || null, feedback })
+      await post(`/api/packets/${a.code}/${s.code}/score`, { score: score === '' ? null : Number(score), scoreOf: of === '' ? null : Number(of), note: note || null, feedback, corrections: fixit })
       setSaved(true)
       onSaved()
     } catch (e) {
@@ -259,6 +261,19 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings }: {
           <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Feedback · for {/\(([^)]+)\)\s*$/.exec(s.name)?.[1] ?? s.name}</span>
             <textarea value={feedback} onChange={(e) => { setFeedback(e.target.value); setSaved(false) }} placeholder="The note the student reads. Warm, specific, their own words quoted. Printed as a slip." rows={Math.max(4, Math.min(14, Math.max(note.split('\n').length, feedback.split('\n').length) + 2))} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
           </label>
+        </div>
+        <div className="grid2" style={{ gap: 16 }}>
+          <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Fix-it table · one a line: you wrote → try — why</span>
+            <textarea value={fixit} onChange={(e) => { setFixit(e.target.value); setSaved(false) }} placeholder={'did you became → did you become — after "did", the verb stays plain\nwere do you live → where do you live — "where" asks about a place'} rows={Math.max(3, Math.min(8, fixit.split('\n').length + 1))} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
+          </label>
+          <div className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>On the slip</span>
+            {parseCorrectionLines(fixit).length ? (
+              <table style={{ fontSize: 13 }}>
+                <thead><tr><th>You wrote</th><th>Try</th><th>Why</th></tr></thead>
+                <tbody>{parseCorrectionLines(fixit).map((c, i) => <tr key={i}><td style={{ color: 'var(--accent)', textDecoration: 'line-through' }}>{c.wrote}</td><td style={{ fontWeight: 600, color: 'var(--green)' }}>{c.better}</td><td className="muted">{c.why}</td></tr>)}</tbody>
+              </table>
+            ) : <div className="notice">No fix-it rows yet. The analysis fills them in, or type them on the left. Grades 1 and 2 print without the Why column.</div>}
+          </div>
         </div>
       </form>
     </section>

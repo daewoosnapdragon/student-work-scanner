@@ -3,7 +3,9 @@
 // code (a heading, a bold label, or just the code and a name); whatever
 // comes before the first code, or under a heading that says Class, is the
 // class's own section.
-export interface StudentParts { teacher: string | null; feedback: string | null; domains: Array<{ domain: string; level: number; note: string | null }> }
+import { parseCorrectionLines, type Correction } from '../shared/types.js'
+
+export interface StudentParts { teacher: string | null; feedback: string | null; domains: Array<{ domain: string; level: number; note: string | null }>; corrections: Correction[] }
 
 // A domain line: "- Ideas and content: 3 — uses the frame well" (the dash, colon and note optional).
 const DOMAIN_LINE = /^[-*•]?\s*(?:\*\*)?([^:*]{3,60}?)(?:\*\*)?\s*:(?:\*\*)?\s*(?:\*\*)?\s*([1-4])(?:\s*\/\s*4)?(?:\*\*)?\s*(?:[—–-]|:)?\s*(.*)$/
@@ -15,13 +17,15 @@ const FEEDBACK_LINE = /^(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:feedback|for the student
 const TEACHER_LINE = /^(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:teacher|for the teacher|analysis|teacher notes?)\s*:?\s*(?:\*\*|__)?\s*:?\s*(.*)$/i
 
 const DOMAINS_LINE = /^(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:domains|ratings|rubric)\s*:?\s*(?:\*\*|__)?\s*:?\s*$/i
+const FIXIT_LINE = /^(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:fix[- ]?it|fix[- ]?it table|corrections|proofreading)\s*:?\s*(?:\*\*|__)?\s*:?\s*$/i
 
 export function splitStudentSection(body: string, domainNames: string[] = []): StudentParts {
   const lines = body.split('\n')
   const teacher: string[] = []
   const feedback: string[] = []
   const domains: StudentParts['domains'] = []
-  let into: 'teacher' | 'feedback' | 'domains' = 'teacher'
+  const fixit: string[] = []
+  let into: 'teacher' | 'feedback' | 'domains' | 'fixit' = 'teacher'
   const known = domainNames.map((d) => d.toLowerCase())
   const matchDomain = (name: string): string | null => {
     const n = name.trim().toLowerCase().replace(/[*_]/g, '')
@@ -31,6 +35,8 @@ export function splitStudentSection(body: string, domainNames: string[] = []): S
   for (const raw of lines) {
     const line = raw.trim()
     if (DOMAINS_LINE.test(line)) { into = 'domains'; continue }
+    if (FIXIT_LINE.test(line)) { into = 'fixit'; continue }
+    if (into === 'fixit') { if (line) fixit.push(line); continue }
     const fb = FEEDBACK_LINE.exec(line)
     if (fb && line.length < 120) { into = 'feedback'; if (fb[1]?.trim()) feedback.push(fb[1].trim()); continue }
     const tc = TEACHER_LINE.exec(line)
@@ -44,7 +50,7 @@ export function splitStudentSection(body: string, domainNames: string[] = []): S
     ;(into === 'teacher' ? teacher : feedback).push(raw)
   }
   const t = teacher.join('\n').trim(), f = feedback.join('\n').trim()
-  return { teacher: t || null, feedback: f || null, domains }
+  return { teacher: t || null, feedback: f || null, domains, corrections: parseCorrectionLines(fixit.join('\n')) }
 }
 
 export function splitClassAnswer(text: string, codes: string[]): { byStudent: Map<string, string>; klass: string | null } {
@@ -101,6 +107,7 @@ export function classPrompt(a: { code: string; title: string; klass: string; gra
     '1. For the teacher: 3 to 6 sentences on what the work shows. What is secure, what is developing, one specific thing to teach or praise next, and a score if the work can be scored. Quote or describe the actual writing where it helps.',
     `2. For the student: 3 to 5 short sentences the child reads themselves${a.grade != null ? `, pitched at grade ${a.grade}` : ''}. Warm and specific. Name one thing they did well, quoting their own words, and one thing to try next time. No grades or scores in this part. Address them by their first name.`,
     ...(domains.length ? [`3. Ratings, 1 to 4 (4 strong, 3 secure, 2 developing, 1 beginning) against what this grade can be expected to do, one line each with a short reason, for exactly these domains: ${domains.join('; ')}.`] : []),
+    `${domains.length ? 4 : 3}. A fix-it table for the student: the ${a.grade != null && a.grade <= 2 ? 'up to 3' : '3 to 6'} mistakes most worth fixing, only ones actually on the page, most important first. Each line: exactly what they wrote → the corrected words — the rule in one short sentence a child understands.`,
     '',
     'Format the answer exactly like this, so it can be filed by code:',
     '',
@@ -110,11 +117,14 @@ export function classPrompt(a: { code: string; title: string; klass: string; gra
     '### Feedback',
     '(the note to the student)',
     ...(domains.length ? ['### Domains', ...domains.map((d) => `- ${d}: 3 — (why, in a few words)`)] : []),
+    '### Fix-it',
+    '- did you became → did you become — after "did", the verb stays plain',
+    '- were do you live → where do you live — "where" asks about a place',
     '',
     '## Class',
     '(what the whole class shows: shared strengths, the common gaps, and what to teach next)',
     '',
-    `Use one "## CODE Name" heading per student, every student, in the order above, with "### Teacher"${domains.length ? ', "### Feedback" and "### Domains"' : ' and "### Feedback"'} inside each, and the "## Class" heading last.`,
+    `Use one "## CODE Name" heading per student, every student, in the order above, with "### Teacher", "### Feedback"${domains.length ? ', "### Domains"' : ''} and "### Fix-it" inside each, and the "## Class" heading last.`,
   ]
   return lines.join('\n')
 }

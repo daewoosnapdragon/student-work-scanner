@@ -108,6 +108,7 @@ function migrate(d: DatabaseSync) {
   const pcols = (d.prepare('PRAGMA table_info(packets)').all() as Array<{ name: string }>).map((c) => c.name)
   if (!pcols.includes('feedback')) d.exec('ALTER TABLE packets ADD COLUMN feedback TEXT')
   if (!pcols.includes('analysedAt')) d.exec('ALTER TABLE packets ADD COLUMN analysedAt TEXT')
+  if (!pcols.includes('corrections')) d.exec('ALTER TABLE packets ADD COLUMN corrections TEXT')
 }
 
 // ---------- students ----------
@@ -279,6 +280,9 @@ export function closePacketIncomplete(student: string, assignment: string) {
 }
 export function setPacketScore(student: string, assignment: string, score: number | null, scoreOf: number | null, note: string | null) {
   getDb().prepare('UPDATE packets SET score = ?, scoreOf = ?, note = ? WHERE student = ? AND assignment = ?').run(score, scoreOf, note, student, assignment)
+}
+export function setPacketCorrections(student: string, assignment: string, corrections: Array<{ wrote: string; better: string; why: string | null }> | null) {
+  getDb().prepare('UPDATE packets SET corrections = ? WHERE student = ? AND assignment = ?').run(corrections && corrections.length ? JSON.stringify(corrections) : null, student, assignment)
 }
 export function setPacketFeedback(student: string, assignment: string, feedback: string | null) {
   getDb().prepare('UPDATE packets SET feedback = ? WHERE student = ? AND assignment = ?').run(feedback, student, assignment)
