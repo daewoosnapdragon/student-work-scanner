@@ -6,7 +6,7 @@ Built from the Student Work Scanner design mockup. Analysis (reading handwriting
 
 ## Running it
 
-Needs Node 22.13 or newer. For PDF scans, `pdftoppm` (part of poppler) must be on the PATH; JPEG, PNG and TIFF need nothing extra.
+Needs Node 22.13 or newer and nothing else: PDF scans are rendered with a bundled copy of MuPDF, and JPEG, PNG and TIFF are read directly.
 
 ```bash
 npm install
@@ -27,6 +27,14 @@ Point the scanner at the inbox folder. By default it is `data/inbox` inside this
 SWS_INBOX="/Users/me/Scans" npm start
 ```
 
+### Windows
+
+Double-click `windows\Start Scanner.cmd`. It builds the app the first time, watches `Desktop\scan` (edit the one `set "SWS_INBOX=..."` line in the file if your scanner saves elsewhere), and opens the browser. Keep the window open while scanning.
+
+For a taskbar icon, double-click `windows\Make Shortcut.cmd` once. It puts a Student Work Scanner shortcut on the Desktop; right-click it, choose Show more options, then Pin to taskbar.
+
+If `npm` refuses to run with a message about scripts being disabled, run this once in PowerShell: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
 Other settings: `SWS_DATA_DIR` (where the archive, thumbnails and database live; default `data/`), `PORT` (default 4710), `SWS_INCOMPLETE_AFTER_MIN` (a packet still missing sides this long after its last page goes to review; default 120), `SWS_PDF_DPI` (default 200).
 
 ## Trying it without a scanner
@@ -41,12 +49,14 @@ Open http://localhost:4710. Ten pages file themselves. One has its code torn off
 
 ## How a page is filed
 
-1. The watcher waits until the file has stopped growing, then handles files one at a time in the order they arrived. PDFs are split into one JPEG per page first.
+1. The watcher waits until the file has stopped growing, then handles files one at a time in the order they arrived. A PDF is rendered to one JPEG per page first, and those pages are handled next, in page order.
 2. The decoder looks for a QR code on the whole page, then in each corner at full resolution, then again after sharpening and thresholding. Takes about 100 ms on a 150 dpi page.
 3. The code reads `SWS1|S07|W23|2b`: student S07, assignment W23, sheet 2, back. If the student and assignment exist, the side is one the assignment expects and that side is not already filed, the page moves to `data/archive/W23/S07/2b.jpg` and the packet count goes up. A packet is complete when every expected side is in.
 4. Otherwise the page goes to `data/holding/` and the review queue, with a reason. For an unreadable code the guesses come from scan order: the pages just before and after it say whose stack this came from, and which side that packet is still missing. A packet that stops arriving before it is complete also shows up in review after two hours, to be filed as it is.
 
-Review is keyboard first: J and K move, 1 to 3 pick a guess, Enter files, X skips, R rotates.
+Review is keyboard first: J and K move, 1 to 3 pick a guess, Enter files, X skips, R rotates. Skip everything in the queue clears a backlog in one go, for example old scans without codes that were already in the folder when the program first started. Skipped pages stay on disk under `data/holding/`.
+
+Before the first run, empty the scan folder of old scans, or expect them all in review.
 
 ## Labels
 
@@ -80,6 +90,7 @@ Assignments are added on the Assignments page. An assignment belongs to a class 
 - `shared/types.ts` the shapes both sides use.
 - `scripts/` roster import, demo seed, sample scan generator (uses whatever roster is loaded), `decode-check.ts` to test the decoder on real scans that are not being read.
 - `tests/` vitest unit tests for the code format, packets and review guesses.
+- `windows/` the start script, shortcut maker and icon for a taskbar launcher.
 
 ## Not in yet
 

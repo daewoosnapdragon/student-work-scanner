@@ -9,7 +9,7 @@ import {
 } from '../db.js'
 import { subscribe } from '../events.js'
 import { guessesFor } from '../guesses.js'
-import { abs, fileFromReview, skipFromReview, stalePackets } from '../pipeline.js'
+import { abs, fileFromReview, skipAllInReview, skipFromReview, stalePackets } from '../pipeline.js'
 import { watcherStatus } from '../watcher.js'
 import { expectedSides, formatCode, sideLabel } from '../codes.js'
 import type { Assignment, ReviewItem, Side, Student } from '../../shared/types.js'
@@ -199,6 +199,10 @@ function filedFromReviewThisWeek() {
 function autoFiledThisWeek() {
   return pagesSince(new Date(Date.now() - 7 * 86400_000).toISOString()).filter((p) => p.filedFrom === 'code').length
 }
+
+api.post('/review/skip-all', (req, res) => {
+  res.json({ skipped: skipAllInReview(!!req.body?.notWork) })
+})
 
 api.post('/review/:id/file', (req, res) => {
   const b = req.body ?? {}

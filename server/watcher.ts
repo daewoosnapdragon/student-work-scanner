@@ -23,7 +23,10 @@ async function drain() {
     const file = queue.shift()!
     if (!fs.existsSync(file)) continue
     try {
-      await processInboxFile(file)
+      const next = await processInboxFile(file)
+      // Pages rendered from a PDF go to the front of the queue, in page order,
+      // so scan order stays intact for the review guesses.
+      if (next.length) queue.unshift(...next.filter((f) => !queue.includes(f)))
       lastSeen = new Date().toISOString()
       setMeta('lastSeen', lastSeen)
     } catch (err) {
@@ -37,6 +40,9 @@ async function drain() {
 export function enqueue(file: string) {
   if (!isScanFile(file)) return
   if (queue.includes(file)) return
+  // Pages the pipeline itself rendered are already queued by the time the
+  // watcher notices them; everything else joins in arrival order.
+  if (/__p\d{2}\.jpg$/i.test(file) && busy) return
   queue.push(file)
   queue.sort((a, b) => stamp(a) - stamp(b))
   void drain()

@@ -1,15 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
+import sharp from 'sharp'
+import * as mupdf from 'mupdf'
 import { ARCHIVE_DIR, DATA_DIR, HOLDING_DIR, INBOX_DIR, INCOMPLETE_AFTER_MIN, PDF_DPI, THUMBS_DIR } from './config.js'
 import { decodePage, makeThumb } from './decode.js'
-import { getAssignment, getStudent, hasSide, insertPage, nextSeq, openPackets, packetPages, refreshPacket, updatePage, getPage } from './db.js'
+import { getAssignment, getStudent, hasSide, insertPage, nextSeq, openPackets, packetPages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
 import { broadcast } from './events.js'
 import type { Page, PageRef, Side } from '../shared/types.js'
 import { shortSide } from './codes.js'
 
-const run = promisify(execFile)
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.tif', '.tiff', '.webp', '.bmp'])
 
 export function isScanFile(file: string) {
@@ -17,24 +16,49 @@ export function isScanFile(file: string) {
   return IMAGE_EXT.has(ext) || ext === '.pdf'
 }
 
-// One file from the inbox: split PDFs into page images, otherwise decode and file.
-export async function processInboxFile(file: string): Promise<void> {
+// One file from the inbox. A PDF is rendered to one JPEG per page, which are
+// returned so the caller can process them next, in page order. An image is
+// decoded and filed straight away.
+export async function processInboxFile(file: string): Promise<string[]> {
   const ext = path.extname(file).toLowerCase()
   if (ext === '.pdf') return splitPdf(file)
-  if (!IMAGE_EXT.has(ext)) return
+  if (!IMAGE_EXT.has(ext)) return []
   await processImage(file, path.basename(file))
+  return []
 }
 
-async function splitPdf(file: string) {
+// Renders each PDF page with MuPDF (bundled as WebAssembly, so nothing to
+// install) into the inbox as JPEGs named after the PDF, then removes the PDF.
+async function splitPdf(file: string): Promise<string[]> {
   const stem = path.basename(file, path.extname(file))
-  const outPrefix = path.join(INBOX_DIR, `${stem}__p`)
+  const out: string[] = []
   try {
-    await run('pdftoppm', ['-r', String(PDF_DPI), '-jpeg', file, outPrefix])
+    const doc = mupdf.Document.openDocument(fs.readFileSync(file), 'application/pdf')
+    const n = doc.countPages()
+    if (n === 0) throw new Error('PDF has no pages')
+    for (let i = 0; i < n; i++) {
+      const page = doc.loadPage(i)
+      const [x0, y0, x1, y1] = page.getBounds()
+      // Aim for PDF_DPI, but never wider than 2500 px: scanner PDFs sometimes
+      // declare huge page sizes and the code reads fine at that width anyway.
+      const scale = Math.min(PDF_DPI / 72, 2500 / Math.max(1, x1 - x0))
+      const pix = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false, true)
+      const png = Buffer.from(pix.asPNG())
+      const dest = path.join(INBOX_DIR, `${stem}__p${String(i + 1).padStart(2, '0')}.jpg`)
+      await sharp(png).jpeg({ quality: 88 }).toFile(dest)
+      pix.destroy()
+      page.destroy()
+      out.push(dest)
+    }
+    doc.destroy()
     fs.rmSync(file)
-    // The new JPEGs land in the inbox and the watcher picks them up one by one.
+    console.log(`[pdf] ${path.basename(file)}: ${n} page${n === 1 ? '' : 's'}`)
+    return out
   } catch (err) {
-    console.error('[pdf] could not split', file, err)
-    await processImageAsReview(file, path.basename(file), 'PDF could not be split into pages (is pdftoppm installed?)')
+    console.error('[pdf] could not open', file, err)
+    for (const f of out) fs.rmSync(f, { force: true })
+    await processImageAsReview(file, path.basename(file), `PDF could not be opened (${(err as Error).message})`)
+    return []
   }
 }
 
@@ -140,6 +164,13 @@ export function skipFromReview(pageId: number, notWork = false): Page {
   const updated = getPage(pageId)!
   broadcast('review', updated)
   return updated
+}
+
+export function skipAllInReview(notWork = false): number {
+  const pages = reviewPages()
+  for (const p of pages) updatePage(p.id, { status: notWork ? 'not_work' : 'skipped' })
+  if (pages.length) broadcast('review', { skippedAll: pages.length })
+  return pages.length
 }
 
 // Packets that stopped arriving --------------------------------------------

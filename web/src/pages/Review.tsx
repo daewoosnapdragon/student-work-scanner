@@ -56,6 +56,18 @@ export default function Review() {
       setErr((e as Error).message)
     }
   }
+  async function skipAll() {
+    const pageItems = items.filter((i) => i.kind === 'page').length
+    if (!pageItems) return
+    if (!window.confirm(`Skip all ${pageItems} pages waiting in review? They stay on disk under data/holding and are marked skipped; nothing is deleted.`)) return
+    try {
+      await post('/api/review/skip-all', {})
+      setIdx(0)
+      setBump((b) => b + 1)
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
   async function skip(notWork = false) {
     if (!item || item.kind !== 'page') return
     try {
@@ -180,7 +192,10 @@ export default function Review() {
       )}
 
       <section className="col sep">
-        <div className="over">The queue</div>
+        <div className="between">
+          <div className="over">The queue</div>
+          {items.some((i) => i.kind === 'page') && <button className="btn" onClick={() => void skipAll()}>Skip everything in the queue</button>}
+        </div>
         <div style={{ overflowX: 'auto' }}>
           <table>
             <thead><tr><th style={{ width: 40 }}></th><th style={{ width: 100 }}>Scanned</th><th>Problem</th><th>Best guess</th><th style={{ width: 90 }}>Waiting</th></tr></thead>
