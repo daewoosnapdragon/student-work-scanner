@@ -499,39 +499,36 @@ print.get('/feedback/:assignment{/:student}', (req, res) => {
   res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Feedback · ${esc(a.code)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+KR:wght@400;500&display=swap" rel="stylesheet">
 <style>
-@page{size:A4;margin:0}
+@page{size:A4;margin:10mm 14mm}
 body{margin:0;font-family:'IBM Plex Sans','Noto Sans KR',system-ui,sans-serif;color:#1f1b17;background:#fff}
-.page{width:210mm;height:297mm;box-sizing:border-box;padding:12mm 14mm;display:grid;grid-template-rows:repeat(${per},1fr);gap:0;page-break-after:always;position:relative}
-.page:last-child{page-break-after:auto}
-.slip{box-sizing:border-box;padding:6mm 2mm;display:flex;flex-direction:column;gap:4mm;position:relative}
-.slip+.slip{border-top:1px dashed #cfc5b4}
-header{display:flex;justify-content:space-between;align-items:flex-end;gap:8mm;border-bottom:2px solid #8b1e1e;padding-bottom:3mm}
-.over{font-size:9.5pt;letter-spacing:.14em;text-transform:uppercase;color:#8b1e1e;font-weight:600}
-h1{font-family:'Playfair Display',Georgia,serif;font-size:22pt;margin:1mm 0 0;line-height:1.1}
-.ko{font-family:'Noto Sans KR',sans-serif;font-size:13pt;font-weight:500;color:#6b6259;margin-left:2mm}
-.right{text-align:right}.title{font-size:11pt;color:#3b342d}
-.body{font-size:${per === 1 ? '13pt' : '11.5pt'};line-height:1.6;flex:1}
-.body p{margin:0 0 2.5mm}
-.fix{width:100%;border-collapse:collapse;margin-top:2mm;font-size:${per === 1 ? '11.5pt' : '10pt'}}
-.fix caption{text-align:left;font-size:9.5pt;letter-spacing:.14em;text-transform:uppercase;color:#8b1e1e;font-weight:600;padding:0 0 1.5mm}
-.fix th{font-size:8.5pt;letter-spacing:.08em;text-transform:uppercase;color:#6b6259;text-align:left;font-weight:600;padding:1.2mm 2mm;border-bottom:1px solid #d9d0c1}
-.fix td{padding:1.6mm 2mm;border-bottom:1px solid #e6ddcf;vertical-align:top}
-.fix .w{color:#8b1e1e;text-decoration:line-through;text-decoration-color:rgba(139,30,30,.5)}
-.fix .b{font-weight:600;color:#2f7d4f}
+/* slips flow down the page: a short one takes half a page so two share a sheet; a long one takes what it needs, never split across pages */
+.slip{box-sizing:border-box;min-height:${per === 1 ? '275mm' : '136mm'};padding:5mm 2mm 4mm;display:flex;flex-direction:column;gap:3.5mm;position:relative;break-inside:avoid;page-break-inside:avoid;border-bottom:1px dashed #cfc5b4}
+.slip:last-child{border-bottom:0}
+header{display:flex;justify-content:space-between;align-items:flex-end;gap:8mm;border-bottom:2px solid #8b1e1e;padding-bottom:2.5mm}
+.over{font-size:9pt;letter-spacing:.14em;text-transform:uppercase;color:#8b1e1e;font-weight:600}
+h1{font-family:'Playfair Display',Georgia,serif;font-size:20pt;margin:1mm 0 0;line-height:1.1}
+.ko{font-family:'Noto Sans KR',sans-serif;font-size:12pt;font-weight:500;color:#6b6259;margin-left:2mm}
+.right{text-align:right}.title{font-size:10.5pt;color:#3b342d}
+.body{font-size:${per === 1 ? '12.5pt' : '11pt'};line-height:1.55}
+.body p{margin:0 0 2mm}
+.fix{width:100%;border-collapse:collapse;font-size:${per === 1 ? '11pt' : '9.5pt'};line-height:1.35}
+.fix caption{text-align:left;font-size:9pt;letter-spacing:.14em;text-transform:uppercase;color:#8b1e1e;font-weight:600;padding:0 0 1.2mm}
+.fix th{font-size:8pt;letter-spacing:.08em;text-transform:uppercase;color:#6b6259;text-align:left;font-weight:600;padding:1mm 2mm;border-bottom:1px solid #d9d0c1}
+.fix td{padding:1.3mm 2mm;border-bottom:1px solid #e6ddcf;vertical-align:top}
+.fix .w{color:#8b1e1e;text-decoration:line-through;text-decoration-color:rgba(139,30,30,.5);width:32%}
+.fix .b{font-weight:600;color:#2f7d4f;width:32%}
 .fix .y{color:#3b342d}
-footer{display:flex;justify-content:space-between;font-size:9pt;color:#6b6259;border-top:1px solid #e6ddcf;padding-top:2mm}
+footer{display:flex;justify-content:space-between;font-size:8.5pt;color:#6b6259;border-top:1px solid #e6ddcf;padding-top:1.5mm;margin-top:auto}
 .bar{position:fixed;top:0;left:0;right:0;background:#1f1b17;color:#fff;padding:8px 14px;font-size:13px;display:flex;gap:14px;align-items:center;z-index:9}
 .bar button{font:inherit;background:#8b1e1e;color:#fff;border:0;border-radius:3px;padding:5px 12px;cursor:pointer}
 @media print{.bar{display:none}}
-@media screen{body{background:#e6e3db}.page{background:#fff;margin:48px auto 16px;box-shadow:0 1px 4px rgba(0,0,0,.15)}}
+@media screen{body{background:#e6e3db;padding:56px 0 24px}.sheet{width:182mm;margin:0 auto;background:#fff;padding:10mm 14mm;box-shadow:0 1px 4px rgba(0,0,0,.15)}}
 </style></head><body>
-<div class="bar"><button onclick="window.print()">Print, or save as PDF</button><span>${rows.length} slip${rows.length === 1 ? '' : 's'} · ${per} a page</span><a style="color:#fff" href="?per=${per === 1 ? 2 : 1}">${per === 1 ? 'Two a page' : 'One a page'}</a></div>
-${chunk(slips, per).map((g) => `<div class="page">${g.join('')}</div>`).join('')}
+<div class="bar"><button onclick="window.print()">Print, or save as PDF</button><span>${rows.length} slip${rows.length === 1 ? '' : 's'} · ${per === 1 ? 'one a page' : 'two a page when they fit; a long one takes a page'}</span><a style="color:#fff" href="?per=${per === 1 ? 2 : 1}">${per === 1 ? 'Two a page' : 'One a page'}</a></div>
+<div class="sheet">${slips.join('')}</div>
 </body></html>`)
 })
 
-// The teacher's record of an assignment: students by domain in a landscape
-// table, then each student's notes and feedback, portrait. Print or save as PDF.
 print.get('/overview/:assignment', (req, res) => {
   const a = getAssignment(req.params.assignment.toUpperCase())
   if (!a) return res.status(404).send('no such assignment')
