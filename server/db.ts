@@ -85,6 +85,7 @@ function migrate(d: DatabaseSync) {
   if (!cols.includes('externalId')) d.exec('ALTER TABLE students ADD COLUMN externalId TEXT')
   const acols = (d.prepare('PRAGMA table_info(assignments)').all() as Array<{ name: string }>).map((c) => c.name)
   if (!acols.includes('sides')) d.exec('ALTER TABLE assignments ADD COLUMN sides INTEGER')
+  if (!acols.includes('analysis')) d.exec('ALTER TABLE assignments ADD COLUMN analysis TEXT')
 }
 
 // ---------- students ----------
@@ -119,7 +120,7 @@ export function listAssignments(): Assignment[] {
 export function getAssignment(code: string): Assignment | undefined {
   return getDb().prepare('SELECT * FROM assignments WHERE code = ?').get(code) as unknown as Assignment | undefined
 }
-export function upsertAssignment(a: Omit<Assignment, 'createdAt' | 'sides'> & { sides?: number | null }) {
+export function upsertAssignment(a: Omit<Assignment, 'createdAt' | 'sides' | 'analysis'> & { sides?: number | null }) {
   getDb()
     .prepare(
       `INSERT INTO assignments (code,title,klass,grade,assignedOn,sheets,twoSided,tags,notes,sides) VALUES (?,?,?,?,?,?,?,?,?,?)
@@ -127,6 +128,16 @@ export function upsertAssignment(a: Omit<Assignment, 'createdAt' | 'sides'> & { 
        assignedOn=excluded.assignedOn, sheets=excluded.sheets, twoSided=excluded.twoSided, tags=excluded.tags, notes=excluded.notes, sides=excluded.sides`,
     )
     .run(a.code, a.title, a.klass, a.grade ?? null, a.assignedOn ?? null, a.sheets, a.twoSided, a.tags ?? '', a.notes ?? null, a.sides ?? null)
+}
+export function setAssignmentAnalysis(code: string, analysis: string | null) {
+  getDb().prepare('UPDATE assignments SET analysis = ? WHERE code = ?').run(analysis, code)
+}
+/** Every packet of an assignment recounted, after its sheets or sides change. */
+export function refreshPacketsFor(assignment: string) {
+  for (const p of packetsForAssignment(assignment)) refreshPacket(p.student, p.assignment, p.lastAt)
+}
+export function deletePacket(student: string, assignment: string) {
+  getDb().prepare('DELETE FROM packets WHERE student = ? AND assignment = ?').run(student, assignment)
 }
 /** Remove an assignment that has no work filed under it. Returns false when pages or packets exist. */
 export function deleteAssignment(code: string): boolean {

@@ -34,6 +34,8 @@ export interface Assignment {
   notes: string | null
   /** Total sides actually printed, when fewer than sheets × 2 (a double-sided packet with an odd page count). */
   sides: number | null
+  /** What the class shows: the analysis of the whole set, pasted in or (later) written by the analysis step. */
+  analysis: string | null
   createdAt: string
 }
 
@@ -67,6 +69,7 @@ export interface Packet {
   lastAt: string
   score: number | null
   scoreOf: number | null
+  /** The analysis of this student's work on the assignment, pasted in or (later) written by the analysis step. */
   note: string | null
 }
 

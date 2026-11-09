@@ -64,6 +64,12 @@ Before the first run, empty the scan folder of old scans, or expect them all in 
 
 Scan the pile in order, fronts and backs as the scanner feeds them, and open Review, then File a stack. Choose the assignment (or make it there). The stack is cut into one packet per student, so many sides each, and every packet gets the next student on the roster who has not turned that work in, in name order. Check the names against the page thumbnails, change any that are wrong, give a student with fewer or more sides their own count, click a page to leave it out, then file the lot. Pages file the same way coded ones do.
 
+## Fixing, exporting and analysing an assignment
+
+On an assignment's page: **Edit** changes its title, class, grade, sheets and sides (the code stays, it is printed on the pages; packets are recounted). In a student's packet, the arrows move a page earlier or later and the sides are renumbered by position; **×** sends a page back to Review to be filed under someone else. **Download class PDF** gives every student's pages in name order, one page each under a header with their name, code and side; each packet has its own **PDF** too.
+
+Analysis is a round trip for now: **Copy prompt** puts a prompt on the clipboard that names the assignment and every student by code and asks for one section per student plus a Class section; give it to Claude with the PDF, then **Paste class answer** splits the reply by code into each student's Analysis box and the class's What the class shows. Both boxes can also be typed into by hand, and the student's analysis shows on their page.
+
 ## Printing from Worksheet Studio
 
 Worksheet Studio's Print… dialog has a Class set row. It reads the class list from this program (at `http://localhost:4710`, so the scanner must be running on the same computer, or have been once), prints one copy per student with the code already in the corner and the name on the name line, and registers the assignment here. Nothing to stick on.

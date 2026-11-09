@@ -80,7 +80,7 @@ function PacketRows({ p, open, toggle }: { p: PacketRow; open: boolean; toggle: 
         <td className="small">{a?.tags || <span className="muted">—</span>}</td>
         <td>{p.sides} of {p.expected}{p.closedIncomplete ? <div className="muted small">filed incomplete</div> : !p.complete ? <div className="muted small">still arriving</div> : null}</td>
         <td>{p.score != null ? `${p.score} of ${p.scoreOf ?? '?'}` : <span className="muted">—</span>}</td>
-        <td><button className="btn" onClick={toggle}>{open ? 'Hide' : 'Pages'}</button></td>
+        <td><button className="btn" onClick={toggle}>{open ? 'Hide' : p.note ? 'Pages · analysis' : 'Pages'}</button></td>
       </tr>
       {open && (
         <tr><td colSpan={6} style={{ background: 'var(--paper)' }}>
@@ -92,7 +92,7 @@ function PacketRows({ p, open, toggle }: { p: PacketRow; open: boolean; toggle: 
               </a>
             ))}
           </div>
-          {p.note && <p className="small" style={{ margin: '10px 0 0' }}>{p.note}</p>}
+          {p.note && <div style={{ marginTop: 12 }}><div className="over quiet" style={{ fontSize: 10, marginBottom: 4 }}>Analysis</div><p className="small" style={{ margin: 0, whiteSpace: 'pre-wrap', maxWidth: 720 }}>{p.note}</p></div>}
         </td></tr>
       )}
     </>

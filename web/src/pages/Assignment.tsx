@@ -10,6 +10,8 @@ export default function AssignmentPage() {
   const [bump, setBump] = useState(0)
   const { data, error } = useFetch<Data>(`/api/assignments/${code}`, bump)
   const [open, setOpen] = useState<string | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [pasting, setPasting] = useState(false)
   if (error) return <main><p className="err">{error}</p></main>
   if (!data) return <main><p className="muted">Loading</p></main>
   const a = data.assignment
@@ -30,9 +32,11 @@ export default function AssignmentPage() {
         </p>
         <div className="row">
           {a.tags && <><span className="over quiet" style={{ fontSize: 10, marginRight: 4 }}>Tags</span>{a.tags.split(',').map((t) => t.trim()).filter(Boolean).map((t) => <span key={t} className="chip">{t}</span>)}</>}
-          <a className="btn" style={{ marginLeft: 'auto' }} href={`/print/labels/${a.code}`} target="_blank" rel="noreferrer">Print labels</a>
+          <button className="btn" style={{ marginLeft: 'auto' }} onClick={() => setEditing((v) => !v)}>{editing ? 'Cancel' : 'Edit'}</button>
+          <a className="btn" href={`/print/labels/${a.code}`} target="_blank" rel="noreferrer">Print labels</a>
           <Link className="btn" to={`/compare?assignment=${a.code}`}>Compare</Link>
         </div>
+        {editing && <EditForm a={a} onDone={() => { setEditing(false); setBump((b) => b + 1) }} />}
       </section>
 
       <section className="stats">
@@ -41,6 +45,16 @@ export default function AssignmentPage() {
         <div className="stat"><div className="over quiet">Class average</div><div className="num">{data.average != null ? data.average.toFixed(1) : '—'}{data.average != null && scoreOf != null && <small> of {scoreOf}</small>}</div><div className="muted small">{data.scoredCount} scored</div></div>
         <div className="stat"><div className="over quiet">In review</div><div className="num"><Link to="/review">{data.inReview}</Link></div></div>
       </section>
+
+      {inRows.length > 0 && (
+        <section className="row" style={{ gap: 10 }}>
+          <a className="btn primary" href={`/api/assignments/${a.code}/pdf?download=1`} title="Every student's pages, in name order, one PDF">Download class PDF</a>
+          <CopyPrompt code={a.code} />
+          <button className="btn" onClick={() => setPasting((v) => !v)} title="Paste Claude's whole answer once; it is split by student code">{pasting ? 'Cancel paste' : 'Paste class answer'}</button>
+          <span className="muted small">Download the PDF, copy the prompt, give both to Claude, then paste the answer back here.</span>
+        </section>
+      )}
+      {pasting && <PasteAnswer code={a.code} onDone={() => { setPasting(false); setBump((b) => b + 1) }} />}
 
       <section className="col">
         <div className="between">
@@ -64,7 +78,7 @@ export default function AssignmentPage() {
       <section className="grid2 sep">
         <div className="col" style={{ gap: 10 }}>
           <div className="over">What the class shows</div>
-          <div className="notice">Analysis is not switched on yet. When it is, every answer to one question will sit here side by side, with what the class got right and what to teach next.</div>
+          <ClassAnalysis key={a.analysis ?? ''} a={a} onSaved={() => setBump((b) => b + 1)} />
         </div>
         <div className="col" style={{ gap: 10 }}>
           <div className="over">Scores</div>
@@ -83,6 +97,33 @@ function PacketPanel({ s, a, onSaved }: { s: Row; a: Assignment; onSaved: () => 
   const [note, setNote] = useState(p.note ?? '')
   const [err, setErr] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+  const [pages, setPages] = useState<Page[]>(s.pages)
+  const [moving, setMoving] = useState(false)
+  async function move(i: number, dir: -1 | 1) {
+    const j = i + dir
+    if (j < 0 || j >= pages.length) return
+    const next = [...pages]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    setMoving(true)
+    try {
+      setErr(null)
+      setPages(await post<Page[]>(`/api/packets/${a.code}/${s.code}/order`, { pageIds: next.map((pg) => pg.id) }))
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setMoving(false)
+    }
+  }
+  async function unfile(pg: Page) {
+    if (!window.confirm(`Send ${sideLabel(pg.page, pg.side)} back to Review? It leaves ${s.name}'s packet and can be filed under someone else there.`)) return
+    try {
+      setErr(null)
+      await post(`/api/pages/${pg.id}/unfile`, {})
+      onSaved()
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
   async function save() {
     try {
       setErr(null)
@@ -97,23 +138,38 @@ function PacketPanel({ s, a, onSaved }: { s: Row; a: Assignment; onSaved: () => 
     <section className="card" style={{ padding: 20, gap: 14 }}>
       <div className="between">
         <div><Link to={`/students/${s.code}`} className="serif" style={{ fontSize: 22, fontWeight: 700, color: 'var(--ink)' }}>{s.name}</Link> <span className="muted small" style={{ marginLeft: 8 }}>{s.code} · {p.sides} of {p.expected} sides{p.closedIncomplete ? ', filed incomplete' : ''} · last page {fmtDate(p.lastAt)}</span></div>
-        <Link className="btn" to={`/compare?assignment=${a.code}&left=${s.code}`}>Compare</Link>
+        <div className="row">
+          <a className="btn" href={`/api/packets/${a.code}/${s.code}/pdf?download=1`} title="This student's pages as one PDF">PDF</a>
+          <Link className="btn" to={`/compare?assignment=${a.code}&left=${s.code}`}>Compare</Link>
+        </div>
       </div>
-      <div className="thumbs">
-        {s.pages.map((pg) => (
-          <a key={pg.id} className="thumb" href={fileUrl(pg.filePath)} target="_blank" rel="noreferrer">
-            <img src={fileUrl(pg.thumbPath ?? pg.filePath)} alt={sideLabel(pg.page, pg.side)} />
-            <span>{sideLabel(pg.page, pg.side)}</span>
-          </a>
+      <div className="thumbs" style={{ opacity: moving ? 0.6 : 1 }}>
+        {pages.map((pg, i) => (
+          <div key={pg.id} className="thumb">
+            <a href={fileUrl(pg.filePath)} target="_blank" rel="noreferrer"><img src={fileUrl(pg.thumbPath ?? pg.filePath)} alt={sideLabel(pg.page, pg.side)} /></a>
+            <span className="between" style={{ gap: 4 }}>
+              <span>{sideLabel(pg.page, pg.side)}</span>
+              <span className="row" style={{ gap: 2 }}>
+                <button className="btn" style={{ padding: '1px 6px' }} disabled={i === 0 || moving} onClick={() => void move(i, -1)} title="Move this page earlier" aria-label="Move earlier">‹</button>
+                <button className="btn" style={{ padding: '1px 6px' }} disabled={i === pages.length - 1 || moving} onClick={() => void move(i, 1)} title="Move this page later" aria-label="Move later">›</button>
+                <button className="btn" style={{ padding: '1px 6px' }} onClick={() => void unfile(pg)} title="Not this student's page: send it back to Review" aria-label="Send back to review">×</button>
+              </span>
+            </span>
+          </div>
         ))}
       </div>
-      <form className="row" style={{ gap: 12 }} onSubmit={(e) => { e.preventDefault(); void save() }}>
-        <label className="row"><span className="over quiet" style={{ fontSize: 10 }}>Score</span><input type="number" step="0.5" min={0} value={score} onChange={(e) => { setScore(e.target.value); setSaved(false) }} style={{ width: 70 }} /></label>
-        <label className="row"><span className="over quiet" style={{ fontSize: 10 }}>of</span><input type="number" step="1" min={1} value={of} onChange={(e) => { setOf(e.target.value); setSaved(false) }} style={{ width: 70 }} /></label>
-        <label className="row" style={{ flex: 1 }}><span className="over quiet" style={{ fontSize: 10 }}>Note</span><input type="text" value={note} onChange={(e) => { setNote(e.target.value); setSaved(false) }} placeholder="What you noticed" style={{ flex: 1 }} /></label>
-        <button type="submit" className="btn primary">Save</button>
-        {saved && <span className="muted small">Saved</span>}
-        {err && <span className="err">{err}</span>}
+      <div className="muted small">Pages out of order? The arrows move a page; sides are renumbered by position. × sends a page back to Review.</div>
+      <form className="col" style={{ gap: 10 }} onSubmit={(e) => { e.preventDefault(); void save() }}>
+        <div className="row" style={{ gap: 12 }}>
+          <label className="row"><span className="over quiet" style={{ fontSize: 10 }}>Score</span><input type="number" step="0.5" min={0} value={score} onChange={(e) => { setScore(e.target.value); setSaved(false) }} style={{ width: 70 }} /></label>
+          <label className="row"><span className="over quiet" style={{ fontSize: 10 }}>of</span><input type="number" step="1" min={1} value={of} onChange={(e) => { setOf(e.target.value); setSaved(false) }} style={{ width: 70 }} /></label>
+          <button type="submit" className="btn primary" style={{ marginLeft: 'auto' }}>Save</button>
+          {saved && <span className="muted small">Saved</span>}
+          {err && <span className="err">{err}</span>}
+        </div>
+        <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Analysis</span>
+          <textarea value={note} onChange={(e) => { setNote(e.target.value); setSaved(false) }} placeholder="What the work shows: paste Claude's answer for this student, or write your own." rows={note ? Math.min(14, note.split('\n').length + 2) : 3} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
+        </label>
       </form>
     </section>
   )
@@ -135,5 +191,108 @@ function ScoreTable({ rows }: { rows: Row[] }) {
         <tbody>{keys.map((k) => <tr key={k}><td>{k}</td><td style={{ textAlign: 'right' }}>{buckets.get(k)}</td></tr>)}</tbody>
       </table>
     </div>
+  )
+}
+
+
+function EditForm({ a, onDone }: { a: Assignment; onDone: () => void }) {
+  const [f, setF] = useState({ title: a.title, klass: a.klass, grade: a.grade == null ? '' : String(a.grade), assignedOn: a.assignedOn ?? '', sheets: a.sheets, twoSided: !!a.twoSided, sides: a.sides == null ? '' : String(a.sides), tags: a.tags })
+  const [err, setErr] = useState<string | null>(null)
+  const { data: classes } = useFetch<{ classes: string[] }>('/api/students')
+  const max = f.sheets * (f.twoSided ? 2 : 1)
+  async function save() {
+    try {
+      setErr(null)
+      await fetch(`/api/assignments/${a.code}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...f, grade: f.grade === '' ? null : Number(f.grade), sides: f.sides === '' ? null : Number(f.sides) }) }).then(async (r) => { if (!r.ok) throw new Error((await r.json()).error ?? r.statusText) })
+      onDone()
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+  return (
+    <form className="card" style={{ gap: 10, marginTop: 8 }} onSubmit={(e) => { e.preventDefault(); void save() }}>
+      <div className="muted small">The code {a.code} stays: it is printed on the pages already. Changing sheets or sides recounts every packet.</div>
+      <div className="row" style={{ gap: 12 }}>
+        <label className="col" style={{ gap: 4, flex: 1 }}><span className="over quiet" style={{ fontSize: 10 }}>Title</span><input type="text" required value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></label>
+        <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Class</span><input type="text" required list="edit-classes" value={f.klass} onChange={(e) => setF({ ...f, klass: e.target.value })} style={{ width: 140 }} /><datalist id="edit-classes">{classes?.classes.map((c) => <option key={c} value={c} />)}</datalist></label>
+        <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Grade</span><input type="number" min={1} max={6} value={f.grade} onChange={(e) => setF({ ...f, grade: e.target.value })} style={{ width: 70 }} /></label>
+        <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Assigned</span><input type="date" value={f.assignedOn} onChange={(e) => setF({ ...f, assignedOn: e.target.value })} /></label>
+      </div>
+      <div className="row" style={{ gap: 12 }}>
+        <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Sheets</span><input type="number" min={1} max={20} value={f.sheets} onChange={(e) => setF({ ...f, sheets: Number(e.target.value) })} style={{ width: 70 }} /></label>
+        <label className="row" style={{ alignSelf: 'flex-end', paddingBottom: 8 }}><input type="checkbox" checked={f.twoSided} onChange={(e) => setF({ ...f, twoSided: e.target.checked })} /> Both sides are used</label>
+        <label className="col" style={{ gap: 4 }} title="Only when fewer sides are actually used than sheets × sides, such as 2 sheets both sides but the last back blank: 3"><span className="over quiet" style={{ fontSize: 10 }}>Sides in all</span><input type="number" min={1} max={max} value={f.sides} placeholder={String(max)} onChange={(e) => setF({ ...f, sides: e.target.value })} style={{ width: 80 }} /></label>
+        <label className="col" style={{ gap: 4, flex: 1 }}><span className="over quiet" style={{ fontSize: 10 }}>Tags</span><input type="text" value={f.tags} onChange={(e) => setF({ ...f, tags: e.target.value })} /></label>
+      </div>
+      {err && <p className="err" style={{ margin: 0 }}>{err}</p>}
+      <div className="row"><button type="submit" className="btn primary">Save</button><button type="button" className="btn" onClick={onDone}>Cancel</button></div>
+    </form>
+  )
+}
+
+function CopyPrompt({ code }: { code: string }) {
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  async function copy() {
+    try {
+      const text = await fetch(`/api/assignments/${code}/prompt`).then((r) => r.text())
+      await navigator.clipboard.writeText(text)
+      setState('copied')
+    } catch {
+      setState('failed')
+    }
+    setTimeout(() => setState('idle'), 2500)
+  }
+  return (
+    <span className="row" style={{ gap: 6 }}>
+      <button className="btn" onClick={() => void copy()} title="A prompt for Claude naming the assignment and every student by code, shaped so the answer pastes straight back">Copy prompt</button>
+      {state === 'copied' && <span className="muted small">Copied. Paste it into Claude with the PDF.</span>}
+      {state === 'failed' && <a className="small" href={`/api/assignments/${code}/prompt`} target="_blank" rel="noreferrer">Open the prompt instead</a>}
+    </span>
+  )
+}
+
+function PasteAnswer({ code, onDone }: { code: string; onDone: () => void }) {
+  const [text, setText] = useState('')
+  const [result, setResult] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  async function send() {
+    try {
+      setErr(null)
+      const r = await post<{ students: string[]; klass: boolean; unmatched: string[] }>(`/api/assignments/${code}/analysis/paste`, { text })
+      setResult(`Filed analysis for ${r.students.length} student${r.students.length === 1 ? '' : 's'}${r.klass ? ' and the class' : ''}.${r.unmatched.length ? ` Nothing found for ${r.unmatched.join(', ')}.` : ''}`)
+      setTimeout(onDone, 1800)
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+  return (
+    <section className="card" style={{ gap: 10 }}>
+      <div className="over quiet">Paste Claude's whole answer</div>
+      <div className="muted small">Each part that starts with a student's code goes to that student; a part headed Class goes to What the class shows. Anything already there for those students is replaced.</div>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={12} placeholder={'## 4S18 Lee Yoona\n…\n\n## Class\n…'} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
+      <div className="row"><button className="btn primary" disabled={!text.trim()} onClick={() => void send()}>File it</button>{result && <span className="small">{result}</span>}{err && <span className="err">{err}</span>}</div>
+    </section>
+  )
+}
+
+function ClassAnalysis({ a, onSaved }: { a: Assignment; onSaved: () => void }) {
+  const [text, setText] = useState(a.analysis ?? '')
+  const [saved, setSaved] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  async function save() {
+    try {
+      setErr(null)
+      await post(`/api/assignments/${a.code}/analysis`, { analysis: text })
+      setSaved(true)
+      onSaved()
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+  return (
+    <form className="col" style={{ gap: 8 }} onSubmit={(e) => { e.preventDefault(); void save() }}>
+      <textarea value={text} onChange={(e) => { setText(e.target.value); setSaved(false) }} rows={text ? Math.min(18, text.split('\n').length + 2) : 4} placeholder="What the whole class shows: paste the Class part of Claude's answer, or write your own." style={{ width: '100%', font: 'inherit', fontSize: 13.5, lineHeight: 1.5, padding: '10px 12px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
+      <div className="row"><button type="submit" className="btn primary">Save</button>{saved && <span className="muted small">Saved</span>}{err && <span className="err">{err}</span>}</div>
+    </form>
   )
 }

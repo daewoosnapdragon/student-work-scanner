@@ -4,7 +4,7 @@ import sharp from 'sharp'
 import * as mupdf from 'mupdf'
 import { ARCHIVE_DIR, DATA_DIR, HOLDING_DIR, INBOX_DIR, INCOMPLETE_AFTER_MIN, PDF_DPI, THUMBS_DIR } from './config.js'
 import { decodePage, makeThumb } from './decode.js'
-import { getAssignment, getStudent, hasSide, insertPage, nextSeq, openPackets, packetPages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
+import { deletePacket, getAssignment, getStudent, hasSide, insertPage, nextSeq, openPackets, packetPages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
 import { broadcast } from './events.js'
 import type { Page, PageRef, Side } from '../shared/types.js'
 import { shortSide } from './codes.js'
@@ -161,6 +161,50 @@ export function skipFromReview(pageId: number, notWork = false): Page {
   const p = getPage(pageId)
   if (!p) throw new Error('page not found')
   updatePage(pageId, { status: notWork ? 'not_work' : 'skipped' })
+  const updated = getPage(pageId)!
+  broadcast('review', updated)
+  return updated
+}
+
+// The pages of one packet in the order given become sides 1 front, 1 back,
+// 2 front … (or 1, 2, 3 front for single-sided work). Files are renamed in
+// two steps so two pages swapping names never collide.
+export function reorderPacket(student: string, assignment: string, pageIds: number[]): Page[] {
+  const a = getAssignment(assignment)
+  if (!a) throw new Error(`no assignment ${assignment}`)
+  const pages = packetPages(student, assignment)
+  const byId = new Map(pages.map((p) => [p.id, p]))
+  const ordered = pageIds.map((id) => byId.get(id)).filter((p): p is Page => !!p)
+  if (ordered.length !== pages.length) throw new Error('the order must name every page of the packet once')
+  const temp: Array<{ p: Page; tmp: string; dest: string; page: number; side: Side }> = []
+  ordered.forEach((p, i) => {
+    const page = a.twoSided ? Math.floor(i / 2) + 1 : i + 1
+    const side: Side = a.twoSided ? (i % 2 === 0 ? 'a' : 'b') : 'a'
+    const ext = path.extname(p.filePath) || '.jpg'
+    const dest = path.join(ARCHIVE_DIR, assignment, student, `${page}${side}${ext}`)
+    const tmp = path.join(ARCHIVE_DIR, assignment, student, `.${p.id}.moving${ext}`)
+    temp.push({ p, tmp, dest, page, side })
+  })
+  for (const t of temp) fs.renameSync(abs(t.p.filePath), t.tmp)
+  for (const t of temp) {
+    fs.renameSync(t.tmp, t.dest)
+    updatePage(t.p.id, { page: t.page, side: t.side, filePath: rel(t.dest) })
+  }
+  const packet = refreshPacket(student, assignment, new Date().toISOString())
+  broadcast('packet', packet)
+  return packetPages(student, assignment)
+}
+
+// A page filed under the wrong student goes back to review, to be filed again.
+export function unfilePage(pageId: number): Page {
+  const p = getPage(pageId)
+  if (!p) throw new Error('page not found')
+  if (p.status !== 'filed' || !p.student || !p.assignment) throw new Error('page is not filed')
+  const dest = path.join(HOLDING_DIR, `${p.seq}-${p.sourceName}`)
+  fs.renameSync(abs(p.filePath), dest)
+  updatePage(pageId, { status: 'review', filePath: rel(dest), reason: `Sent back from ${p.student} · ${p.assignment}`, filedFrom: null, decoded: null, student: null, assignment: null, page: null, side: null })
+  if (packetPages(p.student, p.assignment).length === 0) deletePacket(p.student, p.assignment)
+  else refreshPacket(p.student, p.assignment, new Date().toISOString())
   const updated = getPage(pageId)!
   broadcast('review', updated)
   return updated

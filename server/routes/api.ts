@@ -6,10 +6,13 @@ import {
   allPackets, expectedFor, findStudentsByName, getAssignment, getPacket, getStudent, listAssignments, listStudents,
   packetPages, packetsForAssignment, packetsForStudent, pagesForStudent, pagesSince, recentPages, reviewPages,
   setPacketScore, upsertAssignment, upsertStudent, closePacketIncomplete, getPage, getMeta, sidesFor, deleteAssignment,
+  refreshPacketsFor, setAssignmentAnalysis,
 } from '../db.js'
 import { subscribe } from '../events.js'
 import { guessesFor } from '../guesses.js'
-import { abs, fileFromReview, skipAllInReview, skipFromReview, stalePackets } from '../pipeline.js'
+import { abs, fileFromReview, reorderPacket, skipAllInReview, skipFromReview, stalePackets, unfilePage } from '../pipeline.js'
+import { buildPdf } from '../pdf.js'
+import { classPrompt, splitClassAnswer } from '../analysis.js'
 import { watcherStatus } from '../watcher.js'
 import { formatCode, sideLabel } from '../codes.js'
 import type { Assignment, ReviewItem, Side, Student } from '../../shared/types.js'
@@ -129,6 +132,113 @@ api.post('/assignments', (req, res) => {
     sides: b.sides == null ? null : Number(b.sides),
   })
   res.json(getAssignment(String(b.code).toUpperCase()))
+})
+
+// Edit an assignment. The code stays: it is printed on pages already. Sheets
+// or sides changing recounts every packet.
+api.put('/assignments/:code', (req, res) => {
+  const code = req.params.code.toUpperCase()
+  const a = getAssignment(code)
+  if (!a) return res.status(404).json({ error: 'no such assignment' })
+  const b = req.body ?? {}
+  upsertAssignment({
+    code, title: b.title ?? a.title, klass: b.klass ?? a.klass, grade: b.grade === undefined ? a.grade : (b.grade === null || b.grade === '' ? null : Number(b.grade)),
+    assignedOn: b.assignedOn === undefined ? a.assignedOn : b.assignedOn || null, sheets: Number(b.sheets ?? a.sheets), twoSided: b.twoSided === undefined ? a.twoSided : (b.twoSided ? 1 : 0),
+    tags: b.tags ?? a.tags, notes: b.notes === undefined ? a.notes : b.notes, sides: b.sides === undefined ? a.sides : (b.sides === null || b.sides === '' ? null : Number(b.sides)),
+  })
+  refreshPacketsFor(code)
+  res.json(getAssignment(code))
+})
+
+api.post('/assignments/:code/analysis', (req, res) => {
+  const code = req.params.code.toUpperCase()
+  if (!getAssignment(code)) return res.status(404).json({ error: 'no such assignment' })
+  const text = typeof req.body?.analysis === 'string' ? req.body.analysis.trim() : ''
+  setAssignmentAnalysis(code, text || null)
+  res.json(getAssignment(code))
+})
+
+// Claude's answer about the whole class, pasted once: each student's part
+// goes to their packet, the class part to the assignment.
+api.post('/assignments/:code/analysis/paste', (req, res) => {
+  const code = req.params.code.toUpperCase()
+  const a = getAssignment(code)
+  if (!a) return res.status(404).json({ error: 'no such assignment' })
+  const text = String(req.body?.text ?? '')
+  const packets = packetsForAssignment(code)
+  const { byStudent, klass } = splitClassAnswer(text, packets.map((p) => p.student))
+  const filed: string[] = []
+  for (const [student, body] of byStudent) {
+    const pk = packets.find((p) => p.student === student)
+    if (!pk) continue
+    setPacketScore(student, code, pk.score, pk.scoreOf, body)
+    filed.push(student)
+  }
+  if (klass) setAssignmentAnalysis(code, klass)
+  res.json({ students: filed, klass: !!klass, unmatched: packets.filter((p) => !byStudent.has(p.student)).map((p) => p.student) })
+})
+
+api.get('/assignments/:code/prompt', (req, res) => {
+  const code = req.params.code.toUpperCase()
+  const a = getAssignment(code)
+  if (!a) return res.status(404).json({ error: 'no such assignment' })
+  const students = packetsForAssignment(code).map((p) => ({ code: p.student, name: getStudent(p.student)?.name ?? p.student, pages: packetPages(p.student, code).length })).sort((x, y) => x.name.localeCompare(y.name))
+  res.type('text').send(classPrompt(a, students))
+})
+
+// The whole class as one PDF, students in name order, each page under a header line.
+api.get('/assignments/:code/pdf', async (req, res) => {
+  const code = req.params.code.toUpperCase()
+  const a = getAssignment(code)
+  if (!a) return res.status(404).json({ error: 'no such assignment' })
+  const sections = packetsForAssignment(code)
+    .map((p) => ({ student: getStudent(p.student) ?? ({ code: p.student, name: p.student } as Student), pages: packetPages(p.student, code) }))
+    .filter((s) => s.pages.length)
+    .sort((x, y) => x.student.name.localeCompare(y.student.name))
+  if (!sections.length) return res.status(404).json({ error: 'nothing scanned for this assignment yet' })
+  try {
+    const pdf = await buildPdf(a, sections)
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${encodeURIComponent(`${a.code} ${a.title} - class.pdf`)}"`)
+    res.send(Buffer.from(pdf))
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+api.get('/packets/:assignment/:student/pdf', async (req, res) => {
+  const assignment = req.params.assignment.toUpperCase(), student = req.params.student.toUpperCase()
+  const a = getAssignment(assignment)
+  const s = getStudent(student)
+  if (!a || !s) return res.status(404).json({ error: 'no such packet' })
+  const pages = packetPages(student, assignment)
+  if (!pages.length) return res.status(404).json({ error: 'no pages filed' })
+  try {
+    const pdf = await buildPdf(a, [{ student: s, pages }])
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${encodeURIComponent(`${a.code} ${s.name}.pdf`)}"`)
+    res.send(Buffer.from(pdf))
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// The pages of a packet in a new order: sides renumbered by position.
+api.post('/packets/:assignment/:student/order', (req, res) => {
+  const ids = Array.isArray(req.body?.pageIds) ? (req.body.pageIds as unknown[]).map(Number) : []
+  try {
+    res.json(reorderPacket(req.params.student.toUpperCase(), req.params.assignment.toUpperCase(), ids))
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message })
+  }
+})
+
+api.post('/pages/:id/unfile', (req, res) => {
+  try {
+    res.json(unfilePage(Number(req.params.id)))
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message })
+  }
 })
 
 api.delete('/assignments/:code', (req, res) => {
