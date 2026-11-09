@@ -1,0 +1,42 @@
+{
+  "name": "student-work-scanner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Watches a scanner's inbox folder, reads the QR code on each page, files pages into student packets, and shows the archive in a browser.",
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"npm run dev:server\" \"npm run dev:web\"",
+    "dev:server": "tsx watch --no-warnings=ExperimentalWarning server/index.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build": "tsc -p server/tsconfig.json && vite build --config web/vite.config.ts",
+    "start": "node --no-warnings=ExperimentalWarning dist/server/index.js",
+    "seed:demo": "tsx --no-warnings=ExperimentalWarning scripts/seed-demo.ts",
+    "samples": "tsx --no-warnings=ExperimentalWarning scripts/make-samples.ts",
+    "test": "NODE_OPTIONS=--no-warnings=ExperimentalWarning vitest run",
+    "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3",
+    "express": "^5.1.0",
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4",
+    "sharp": "^0.34.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.15.0",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^18.3.20",
+    "@types/react-dom": "^18.3.6",
+    "@vitejs/plugin-react": "^4.4.1",
+    "concurrently": "^9.1.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.1.3"
+  }
+}
