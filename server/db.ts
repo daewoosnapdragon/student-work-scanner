@@ -80,25 +80,28 @@ function migrate(d: DatabaseSync) {
   );
   CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
   `)
+  // Columns added after the first release.
+  const cols = (d.prepare('PRAGMA table_info(students)').all() as Array<{ name: string }>).map((c) => c.name)
+  if (!cols.includes('externalId')) d.exec('ALTER TABLE students ADD COLUMN externalId TEXT')
 }
 
 // ---------- students ----------
 export function listStudents(klass?: string): Student[] {
   const d = getDb()
-  if (klass) return d.prepare('SELECT * FROM students WHERE klass = ? ORDER BY name').all(klass) as unknown as Student[]
-  return d.prepare('SELECT * FROM students ORDER BY klass, name').all() as unknown as Student[]
+  if (klass) return d.prepare('SELECT * FROM students WHERE klass = ? ORDER BY grade, name').all(klass) as unknown as Student[]
+  return d.prepare('SELECT * FROM students ORDER BY klass, grade, name').all() as unknown as Student[]
 }
 export function getStudent(code: string): Student | undefined {
   return getDb().prepare('SELECT * FROM students WHERE code = ?').get(code) as unknown as Student | undefined
 }
-export function upsertStudent(s: Omit<Student, 'active'> & { active?: number }) {
+export function upsertStudent(s: Omit<Student, 'active' | 'externalId'> & { active?: number; externalId?: string | null }) {
   getDb()
     .prepare(
-      `INSERT INTO students (code,name,nameKo,klass,grade,homeroom,active) VALUES (?,?,?,?,?,?,?)
+      `INSERT INTO students (code,name,nameKo,klass,grade,homeroom,active,externalId) VALUES (?,?,?,?,?,?,?,?)
        ON CONFLICT(code) DO UPDATE SET name=excluded.name, nameKo=excluded.nameKo, klass=excluded.klass,
-       grade=excluded.grade, homeroom=excluded.homeroom, active=excluded.active`,
+       grade=excluded.grade, homeroom=excluded.homeroom, active=excluded.active, externalId=COALESCE(excluded.externalId, students.externalId)`,
     )
-    .run(s.code, s.name, s.nameKo ?? null, s.klass, s.grade ?? null, s.homeroom ?? null, s.active ?? 1)
+    .run(s.code, s.name, s.nameKo ?? null, s.klass, s.grade ?? null, s.homeroom ?? null, s.active ?? 1, s.externalId ?? null)
 }
 export function findStudentsByName(q: string): Student[] {
   const like = `%${q.trim()}%`

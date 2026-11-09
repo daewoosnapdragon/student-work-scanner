@@ -9,6 +9,7 @@ import sharp from 'sharp'
 import QRCode from 'qrcode'
 import { INBOX_DIR } from '../server/config.js'
 import { formatCode } from '../server/codes.js'
+import { getAssignment, listAssignments, listStudents, openDb, upsertAssignment } from '../server/db.js'
 import type { Side } from '../shared/types.js'
 
 const W = 1240
@@ -16,19 +17,42 @@ const H = 1754
 
 interface Spec { student: string; name: string; assignment: string; title: string; page: number; side: Side; torn?: boolean; tag?: string }
 
+// Use whatever roster and assignments are loaded. With nothing loaded yet,
+// make a sample assignment for the first three active students.
+openDb()
+const active = listStudents().filter((s) => s.active)
+const students = active.filter((s) => s.grade === active[0]?.grade && s.klass === active[0]?.klass).slice(0, 3)
+if (students.length < 3) {
+  console.error('Need at least three active students. Run npm run import:students -- your.csv or npm run seed:demo first.')
+  process.exit(1)
+}
+let a = listAssignments().find((x) => x.klass === students[0].klass && (x.grade == null || x.grade === students[0].grade) && x.sheets >= 2 && x.twoSided)
+let single = listAssignments().find((x) => x.klass === students[0].klass && (x.grade == null || x.grade === students[0].grade) && x.sheets === 1 && !x.twoSided)
+if (!a) {
+  upsertAssignment({ code: 'W23', title: 'Short Vowel Sort', klass: students[0].klass, grade: students[0].grade, assignedOn: new Date().toISOString().slice(0, 10), sheets: 2, twoSided: 1, tags: 'phonics, short vowels', notes: 'made by npm run samples' })
+  a = getAssignment('W23')!
+}
+if (!single) {
+  upsertAssignment({ code: 'W22', title: 'Weekend Writing', klass: students[0].klass, grade: students[0].grade, assignedOn: new Date().toISOString().slice(0, 10), sheets: 1, twoSided: 0, tags: 'writing, narrative', notes: 'made by npm run samples' })
+  single = getAssignment('W22')!
+}
+const [s1, s2, s3] = students
+const first = (s: { name: string }) => s.name.replace(/\s*\(.*\)\s*$/, '')
+const A = a.code, T = a.title, B = single.code, BT = single.title
+
 const specs: Spec[] = [
-  { student: 'S03', name: 'Jiwoo Kim', assignment: 'W23', title: 'Short Vowel Sort', page: 1, side: 'a' },
-  { student: 'S03', name: 'Jiwoo Kim', assignment: 'W23', title: 'Short Vowel Sort', page: 1, side: 'b' },
-  { student: 'S03', name: 'Jiwoo Kim', assignment: 'W23', title: 'Short Vowel Sort', page: 2, side: 'a' },
-  { student: 'S03', name: 'Jiwoo Kim', assignment: 'W23', title: 'Short Vowel Sort', page: 2, side: 'b' },
-  { student: 'S07', name: 'Minji Park', assignment: 'W23', title: 'Short Vowel Sort', page: 1, side: 'a' },
-  { student: 'S07', name: 'Minji Park', assignment: 'W23', title: 'Short Vowel Sort', page: 1, side: 'b' },
-  { student: 'S07', name: 'Minji Park', assignment: 'W23', title: 'Short Vowel Sort', page: 2, side: 'a' },
-  { student: 'S07', name: 'Minji Park', assignment: 'W23', title: 'Short Vowel Sort', page: 2, side: 'b', torn: true },
-  { student: 'S04', name: 'Seoyeon Lee', assignment: 'W23', title: 'Short Vowel Sort', page: 1, side: 'a' },
-  { student: 'S04', name: 'Seoyeon Lee', assignment: 'W22', title: 'Weekend Writing', page: 1, side: 'a' },
-  { student: 'S07', name: 'Minji Park', assignment: 'W22', title: 'Weekend Writing', page: 1, side: 'a' },
-  { student: 'S03', name: 'Jiwoo Kim', assignment: 'W23', title: 'Short Vowel Sort', page: 1, side: 'a', tag: 'rescan' },
+  { student: s1.code, name: first(s1), assignment: A, title: T, page: 1, side: 'a' },
+  { student: s1.code, name: first(s1), assignment: A, title: T, page: 1, side: 'b' },
+  { student: s1.code, name: first(s1), assignment: A, title: T, page: 2, side: 'a' },
+  { student: s1.code, name: first(s1), assignment: A, title: T, page: 2, side: 'b' },
+  { student: s2.code, name: first(s2), assignment: A, title: T, page: 1, side: 'a' },
+  { student: s2.code, name: first(s2), assignment: A, title: T, page: 1, side: 'b' },
+  { student: s2.code, name: first(s2), assignment: A, title: T, page: 2, side: 'a' },
+  { student: s2.code, name: first(s2), assignment: A, title: T, page: 2, side: 'b', torn: true },
+  { student: s3.code, name: first(s3), assignment: A, title: T, page: 1, side: 'a' },
+  { student: s3.code, name: first(s3), assignment: B, title: BT, page: 1, side: 'a' },
+  { student: s2.code, name: first(s2), assignment: B, title: BT, page: 1, side: 'a' },
+  { student: s1.code, name: first(s1), assignment: A, title: T, page: 1, side: 'a', tag: 'rescan' },
 ]
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -76,4 +100,4 @@ for (let i = 0; i < specs.length; i++) {
   // Space them out a little so a running watcher sees them arrive one by one.
   if (process.argv.includes('--slow')) await new Promise((r) => setTimeout(r, 2500))
 }
-console.log(`Wrote ${made.length} sample pages to ${INBOX_DIR}`)
+console.log(`Wrote ${made.length} sample pages for ${s1.name}, ${s2.name} and ${s3.name} on ${A} and ${B} to ${INBOX_DIR}`)

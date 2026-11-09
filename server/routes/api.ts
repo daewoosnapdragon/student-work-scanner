@@ -135,6 +135,8 @@ api.get('/assignments/:code', (req, res) => {
   if (!a) return res.status(404).json({ error: 'no such assignment' })
   const roster = listStudents(a.klass).filter((s) => s.active && (a.grade == null || s.grade == null || s.grade === a.grade))
   const packets = new Map(packetsForAssignment(a.code).map((p) => [p.student, p]))
+  // Anyone who turned this in but is outside the usual roster (another grade, inactive) still shows.
+  for (const code of packets.keys()) if (!roster.some((s) => s.code === code)) { const s = getStudent(code); if (s) roster.push(s) }
   const students = roster.map((s) => {
     const p = packets.get(s.code)
     return { ...s, packet: p ?? null, pages: p ? packetPages(s.code, a.code) : [] }

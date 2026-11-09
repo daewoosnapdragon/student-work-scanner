@@ -13,6 +13,7 @@
     "start": "node --no-warnings=ExperimentalWarning dist/server/index.js",
     "seed:demo": "tsx --no-warnings=ExperimentalWarning scripts/seed-demo.ts",
     "samples": "tsx --no-warnings=ExperimentalWarning scripts/make-samples.ts",
+    "import:students": "tsx --no-warnings=ExperimentalWarning scripts/import-students.ts",
     "test": "NODE_OPTIONS=--no-warnings=ExperimentalWarning vitest run",
     "typecheck": "tsc -p server/tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit"
   },

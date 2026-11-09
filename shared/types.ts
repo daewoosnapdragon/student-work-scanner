@@ -19,6 +19,7 @@ export interface Student {
   grade: number | null
   homeroom: string | null
   active: number
+  externalId: string | null // the school system's id for the student, if known
 }
 
 export interface Assignment {

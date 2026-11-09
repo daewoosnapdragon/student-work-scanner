@@ -52,27 +52,37 @@ Review is keyboard first: J and K move, 1 to 3 pick a guess, Enter files, X skip
 
 Every assignment page has a Print labels button (`/print/labels/W23`): one QR label per student per side, four across, ready to stick on the top right corner. The same codes can be placed on the worksheet itself before printing; `/print/code/S07/W23/2/b.svg` gives one code as an SVG. The codes use the highest QR error correction, so a third of the code can be damaged and still read.
 
-## Adding students and assignments
+## Your students
 
-Assignments are added on the Assignments page. Students come in through the API for now:
+Export the roster from the school system as CSV (columns: UUID, Name, Korean Name, Grade, English Class, Korean Class, Class Number, Active) and import it:
+
+```bash
+npm run import:students -- path/to/students.csv
+```
+
+Each student gets a short code for the labels from grade, Korean homeroom class and class number: Grade 3, 대 class, number 7 is `3D07` (대 = D, 솔 = S, 매 = M). Run the import again whenever the roster changes. Students missing from a later export are marked inactive, not deleted, so their work stays. The CSV itself is ignored by git; keep it out of the repository.
+
+A single student can also be added through the API:
 
 ```bash
 curl -X POST localhost:4710/api/students -H 'content-type: application/json' \
-  -d '{"code":"S19","name":"New Student","nameKo":"새학생","klass":"Daisy","grade":3,"homeroom":"대 3-20"}'
+  -d '{"code":"3D26","name":"New Student","nameKo":"새학생","klass":"Snapdragon","grade":3,"homeroom":"대 3-26"}'
 ```
 
-or by editing `scripts/seed-demo.ts` to hold your real roster and running `npm run seed:demo`.
+Assignments are added on the Assignments page. An assignment belongs to a class and, optionally, a grade; its roster and label sheet follow from that.
+
+`npm run seed:demo` loads a made-up class instead, for trying things out. Do not run it on top of a real roster.
 
 ## Layout
 
 - `server/` Express API, SQLite (Node's built-in `node:sqlite`, so no native build step), the watcher, decoder and filing pipeline.
 - `web/` Vite and React. Six screens, styled from the mockup.
 - `shared/types.ts` the shapes both sides use.
-- `scripts/` demo seed, sample scan generator, `decode-check.ts` to test the decoder on real scans that are not being read.
+- `scripts/` roster import, demo seed, sample scan generator (uses whatever roster is loaded), `decode-check.ts` to test the decoder on real scans that are not being read.
 - `tests/` vitest unit tests for the code format, packets and review guesses.
 
 ## Not in yet
 
 - Analysis of the work itself (the Claude API step the mockup shows): skill arcs, per-question crops, focus notes, class summaries, the written comparison, Ask the archive.
-- A students page for adding and editing the roster; it is API only.
+- A students page for adding and editing the roster; it is the CSV import and the API only.
 - Phone-camera input. The watcher only handles files that land in the folder.
