@@ -3,7 +3,13 @@ import { Link, useParams } from 'react-router-dom'
 import { post, useFetch, fmtDate, fileUrl, sideLabel, type Assignment, type Packet, type Page, type Student } from '../api'
 
 interface Row extends Student { packet: Packet | null; pages: Page[] }
-interface Data { assignment: Assignment; expected: number; students: Row[]; inReview: number; average: number | null; scoredCount: number }
+interface Rating { student: string; assignment: string; domain: string; level: number; note: string | null }
+interface Data { assignment: Assignment; expected: number; students: Row[]; inReview: number; average: number | null; scoredCount: number; noticing: { text: string; at: string } | null; analysisOn: boolean; domains: string[]; ratings: Rating[] }
+const LEVEL_NAME: Record<number, string> = { 4: 'Strong', 3: 'Secure', 2: 'Developing', 1: 'Beginning' }
+const LEVEL_BG: Record<number, string> = { 4: '#dff0e5', 3: '#eef5e9', 2: '#fff3d6', 1: '#f8dcd8' }
+const shortDomain = (d: string) => d.split(':')[0].trim()
+interface Job { assignment: string; student: string | null; state: 'waiting' | 'running' | 'done' | 'failed'; error?: string }
+interface QueueStatus { running: boolean; waiting: number; jobs: Job[] }
 
 export default function AssignmentPage() {
   const { code } = useParams()
@@ -12,6 +18,8 @@ export default function AssignmentPage() {
   const [open, setOpen] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [pasting, setPasting] = useState(false)
+  const { data: queue } = useFetch<QueueStatus>('/api/analyse')
+  const [analyseErr, setAnalyseErr] = useState<string | null>(null)
   if (error) return <main><p className="err">{error}</p></main>
   if (!data) return <main><p className="muted">Loading</p></main>
   const a = data.assignment
@@ -21,6 +29,19 @@ export default function AssignmentPage() {
   const sorted = [...inRows].sort((x, y) => (y.packet!.score ?? -1) - (x.packet!.score ?? -1) || x.name.localeCompare(y.name))
   const selected = open ? data.students.find((s) => s.code === open) : null
   const scoreOf = inRows.find((s) => s.packet!.scoreOf != null)?.packet!.scoreOf ?? null
+  const mine = (queue?.jobs ?? []).filter((j) => j.assignment === a.code)
+  const active = mine.filter((j) => j.state === 'waiting' || j.state === 'running')
+  const failed = mine.filter((j) => j.state === 'failed')
+  const analysed = inRows.filter((r) => r.packet!.analysedAt).length
+  async function analyseAll(force = false) {
+    try {
+      setAnalyseErr(null)
+      await post(`/api/analyse/assignment/${a.code}`, { force })
+      setBump((b) => b + 1)
+    } catch (e) {
+      setAnalyseErr((e as Error).message)
+    }
+  }
 
   return (
     <main style={{ gap: 32 }}>
@@ -47,12 +68,27 @@ export default function AssignmentPage() {
       </section>
 
       {inRows.length > 0 && (
-        <section className="row" style={{ gap: 10 }}>
-          <a className="btn primary" href={`/api/assignments/${a.code}/pdf?download=1`} title="Every student's pages, in name order, one PDF">Download class PDF</a>
-          <CopyPrompt code={a.code} />
+        <section className="col" style={{ gap: 10 }}>
+          <div className="row" style={{ gap: 10 }}>
+            {data.analysisOn ? (
+              <>
+                <button className="btn primary" onClick={() => void analyseAll(false)} disabled={active.length > 0} title={analysed < inRows.length ? `Read the ${inRows.length - analysed} packet${inRows.length - analysed === 1 ? '' : 's'} not yet analysed, then write the class summary` : 'Every packet has been analysed; this rewrites the class summary'}>
+                  {active.length > 0 ? `Analysing ${active.filter((j) => j.state === 'running')[0]?.student ?? ''}… ${active.length} to go` : analysed < inRows.length ? `Analyse ${inRows.length - analysed === inRows.length ? 'all' : `the ${inRows.length - analysed} new`} with Claude` : 'Rewrite the class summary'}
+                </button>
+                {analysed > 0 && active.length === 0 && <button className="btn" onClick={() => { if (window.confirm(`Analyse all ${inRows.length} packets again? Existing analysis and feedback are replaced.`)) void analyseAll(true) }}>Analyse everything again</button>}
+              </>
+            ) : (
+              <Link className="btn primary" to="/settings" title="Add a Claude API key and the analysis runs here">Switch on analysis</Link>
+            )}
+            <a className="btn" href={`/api/assignments/${a.code}/pdf?download=1`} title="Every student's pages, in name order, one PDF">Class PDF</a>
+            <a className="btn" href={`/print/overview/${a.code}`} target="_blank" rel="noreferrer" title="For your records: the domain table, then every student's notes and feedback">Print record</a>
+            <CopyPrompt code={a.code} />
           <button className="btn" onClick={() => setPasting((v) => !v)} title="Paste Claude's whole answer once; it is split by student code">{pasting ? 'Cancel paste' : 'Paste class answer'}</button>
           {inRows.some((r) => r.packet!.feedback) && <a className="btn" href={`/print/feedback/${a.code}`} target="_blank" rel="noreferrer" title="Every student's note, two slips to a page, to print and hand back with the work">Feedback slips</a>}
-          <span className="muted small">Download the PDF, copy the prompt, give both to Claude, then paste the answer back here.</span>
+          </div>
+          <div className="muted small">{data.analysisOn ? `${analysed} of ${inRows.length} packets analysed.` : 'Without a key:'} Class PDF and Copy prompt go to Claude by hand, and Paste class answer brings the reply back.</div>
+          {analyseErr && <p className="err" style={{ margin: 0 }}>{analyseErr}</p>}
+          {failed.length > 0 && <div className="notice" style={{ borderColor: 'var(--accent)' }}>{failed.length} analysis job{failed.length === 1 ? '' : 's'} failed: {failed[0].error}</div>}
         </section>
       )}
       {pasting && <PasteAnswer code={a.code} onDone={() => { setPasting(false); setBump((b) => b + 1) }} />}
@@ -73,12 +109,13 @@ export default function AssignmentPage() {
       </section>
 
       {selected && selected.packet && (
-        <PacketPanel key={selected.code} s={selected} a={a} onSaved={() => setBump((b) => b + 1)} />
+        <PacketPanel key={`${selected.code}:${selected.packet.analysedAt ?? ''}:${data.ratings.filter((r) => r.student === selected.code).map((r) => r.level).join('')}`} s={selected} a={a} onSaved={() => setBump((b) => b + 1)} analysisOn={data.analysisOn} busyJob={active.some((j) => j.student === selected.code)} domains={data.domains} ratings={data.ratings.filter((r) => r.student === selected.code)} />
       )}
 
       <section className="grid2 sep">
         <div className="col" style={{ gap: 10 }}>
           <div className="over">What the class shows</div>
+          {data.noticing && <p className="serif" style={{ margin: 0, fontSize: 19, lineHeight: 1.35, fontStyle: 'italic' }}>{data.noticing.text}</p>}
           <ClassAnalysis key={a.analysis ?? ''} a={a} onSaved={() => setBump((b) => b + 1)} />
         </div>
         <div className="col" style={{ gap: 10 }}>
@@ -87,12 +124,42 @@ export default function AssignmentPage() {
           <div className="row"><a className="btn" href={`/api/assignments/${a.code}`} target="_blank" rel="noreferrer">JSON</a></div>
         </div>
       </section>
+
+      {inRows.length > 0 && (
+        <section className="col sep" style={{ gap: 12 }}>
+          <div className="between">
+            <div><span className="serif" style={{ fontSize: 26, fontWeight: 700 }}>Overview</span> <span className="muted small" style={{ marginLeft: 8 }}>every student by domain, 1 to 4</span></div>
+            <div className="row"><a className="btn" href={`/print/overview/${a.code}`} target="_blank" rel="noreferrer">Print record</a><Link className="btn" to="/settings" title="The domains are set in Settings">Domains</Link></div>
+          </div>
+          <Overview rows={sorted} domains={data.domains} ratings={data.ratings} onPick={(code) => setOpen(code)} />
+        </section>
+      )}
     </main>
   )
 }
 
-function PacketPanel({ s, a, onSaved }: { s: Row; a: Assignment; onSaved: () => void }) {
+function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings }: { s: Row; a: Assignment; onSaved: () => void; analysisOn: boolean; busyJob: boolean; domains: string[]; ratings: Rating[] }) {
   const p = s.packet!
+  const [levels, setLevels] = useState<Record<string, number>>(Object.fromEntries(ratings.map((r) => [r.domain, r.level])))
+  const [editLevels, setEditLevels] = useState(false)
+  async function saveDomains() {
+    try {
+      setErr(null)
+      await post(`/api/packets/${a.code}/${s.code}/domains`, { domains: domains.filter((d) => levels[d]).map((d) => ({ domain: d, level: levels[d], note: ratings.find((r) => r.domain === d)?.note ?? null })) })
+      setEditLevels(false)
+      onSaved()
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+  async function analyseOne() {
+    try {
+      setErr(null)
+      await post(`/api/analyse/packet/${a.code}/${s.code}`, {})
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
   const [score, setScore] = useState(p.score != null ? String(p.score) : '')
   const [of, setOf] = useState(p.scoreOf != null ? String(p.scoreOf) : '10')
   const [note, setNote] = useState(p.note ?? '')
@@ -141,6 +208,7 @@ function PacketPanel({ s, a, onSaved }: { s: Row; a: Assignment; onSaved: () => 
       <div className="between">
         <div><Link to={`/students/${s.code}`} className="serif" style={{ fontSize: 22, fontWeight: 700, color: 'var(--ink)' }}>{s.name}</Link> <span className="muted small" style={{ marginLeft: 8 }}>{s.code} · {p.sides} of {p.expected} sides{p.closedIncomplete ? ', filed incomplete' : ''} · last page {fmtDate(p.lastAt)}</span></div>
         <div className="row">
+          {analysisOn && <button className="btn primary" disabled={busyJob} onClick={() => void analyseOne()} title={p.analysedAt ? `Analysed ${fmtDate(p.analysedAt)}; read it again` : 'Read these pages with Claude'}>{busyJob ? 'Analysing…' : p.analysedAt ? 'Analyse again' : 'Analyse'}</button>}
           <a className="btn" href={`/api/packets/${a.code}/${s.code}/pdf?download=1`} title="This student's pages as one PDF">PDF</a>
           {p.feedback && <a className="btn" href={`/print/feedback/${a.code}/${s.code}`} target="_blank" rel="noreferrer" title="The note to this student, as a slip to print or save as PDF">Feedback slip</a>}
           <Link className="btn" to={`/compare?assignment=${a.code}&left=${s.code}`}>Compare</Link>
@@ -162,6 +230,20 @@ function PacketPanel({ s, a, onSaved }: { s: Row; a: Assignment; onSaved: () => 
         ))}
       </div>
       <div className="muted small">Pages out of order? The arrows move a page; sides are renumbered by position. × sends a page back to Review.</div>
+      <div className="row" style={{ gap: 6 }}>
+        <span className="over quiet" style={{ fontSize: 10, marginRight: 4 }}>Domains</span>
+        {domains.map((d) => {
+          const r = ratings.find((x) => x.domain === d)
+          return editLevels ? (
+            <label key={d} className="chip row" style={{ gap: 4 }}>{shortDomain(d)}
+              <select value={levels[d] ?? ''} onChange={(e) => setLevels({ ...levels, [d]: Number(e.target.value) })} style={{ padding: '1px 4px', height: 'auto' }}><option value="">·</option>{[4, 3, 2, 1].map((l) => <option key={l} value={l}>{l} {LEVEL_NAME[l]}</option>)}</select>
+            </label>
+          ) : (
+            <span key={d} className="chip" title={r?.note ?? 'not rated'} style={{ background: r ? LEVEL_BG[r.level] : undefined }}>{shortDomain(d)} <b>{r ? r.level : '·'}</b></span>
+          )
+        })}
+        {editLevels ? <><button className="btn" onClick={() => void saveDomains()}>Save</button><button className="btn" onClick={() => setEditLevels(false)}>Cancel</button></> : <button className="btn" onClick={() => setEditLevels(true)}>{ratings.length ? 'Edit' : 'Rate'}</button>}
+      </div>
       <form className="col" style={{ gap: 10 }} onSubmit={(e) => { e.preventDefault(); void save() }}>
         <div className="row" style={{ gap: 12 }}>
           <label className="row"><span className="over quiet" style={{ fontSize: 10 }}>Score</span><input type="number" step="0.5" min={0} value={score} onChange={(e) => { setScore(e.target.value); setSaved(false) }} style={{ width: 70 }} /></label>
@@ -302,5 +384,29 @@ function ClassAnalysis({ a, onSaved }: { a: Assignment; onSaved: () => void }) {
       <textarea value={text} onChange={(e) => { setText(e.target.value); setSaved(false) }} rows={text ? Math.min(18, text.split('\n').length + 2) : 4} placeholder="What the whole class shows: paste the Class part of Claude's answer, or write your own." style={{ width: '100%', font: 'inherit', fontSize: 13.5, lineHeight: 1.5, padding: '10px 12px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
       <div className="row"><button type="submit" className="btn primary">Save</button>{saved && <span className="muted small">Saved</span>}{err && <span className="err">{err}</span>}</div>
     </form>
+  )
+}
+
+
+function Overview({ rows, domains, ratings, onPick }: { rows: Row[]; domains: string[]; ratings: Rating[]; onPick: (code: string) => void }) {
+  const level = (student: string, d: string) => ratings.find((r) => r.student === student && r.domain === d)
+  const avg = (d: string) => { const xs = ratings.filter((r) => r.domain === d).map((r) => r.level); return xs.length ? (xs.reduce((t, x) => t + x, 0) / xs.length).toFixed(1) : '' }
+  if (!ratings.length) return <div className="notice">No domain ratings yet. Analyse the assignment, paste Claude's answer, or click a student and Rate.</div>
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table>
+        <thead><tr><th>Student</th><th style={{ textAlign: 'center' }}>Score</th>{domains.map((d) => <th key={d} style={{ textAlign: 'center' }} title={d}>{shortDomain(d)}</th>)}</tr></thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.code} style={{ cursor: 'pointer' }} onClick={() => onPick(r.code)}>
+              <td style={{ fontWeight: 600 }}>{r.name}</td>
+              <td style={{ textAlign: 'center' }}>{r.packet!.score != null ? `${r.packet!.score}${r.packet!.scoreOf != null ? `/${r.packet!.scoreOf}` : ''}` : <span className="muted">—</span>}</td>
+              {domains.map((d) => { const x = level(r.code, d); return <td key={d} style={{ textAlign: 'center', background: x ? LEVEL_BG[x.level] : undefined }} title={x?.note ?? ''}>{x ? x.level : <span className="muted">·</span>}</td> })}
+            </tr>
+          ))}
+        </tbody>
+        <tfoot><tr><td style={{ fontWeight: 600, borderTop: '2px solid var(--line)' }}>Class average</td><td style={{ borderTop: '2px solid var(--line)' }}></td>{domains.map((d) => <td key={d} style={{ textAlign: 'center', fontWeight: 600, borderTop: '2px solid var(--line)' }}>{avg(d)}</td>)}</tr></tfoot>
+      </table>
+    </div>
   )
 }

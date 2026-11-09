@@ -6,9 +6,12 @@ import { ensureDirs, INBOX_DIR, PORT } from './config.js'
 import { openDb } from './db.js'
 import { startWatcher } from './watcher.js'
 import { api, files, print, setBuild } from './routes/api.js'
+import { onPacketComplete } from './claude.js'
+import { setOnPacketComplete } from './pipeline.js'
 
 ensureDirs()
 openDb()
+setOnPacketComplete(onPacketComplete)
 
 const app = express()
 // Worksheet Studio (in the browser, on another origin) reads the roster and

@@ -79,6 +79,25 @@ function migrate(d: DatabaseSync) {
     PRIMARY KEY (student, assignment)
   );
   CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+  CREATE TABLE IF NOT EXISTS skills (
+    student TEXT NOT NULL,
+    assignment TEXT NOT NULL,
+    name TEXT NOT NULL,
+    level TEXT NOT NULL,
+    evidence TEXT,
+    at TEXT NOT NULL,
+    PRIMARY KEY (student, assignment, name)
+  );
+  CREATE INDEX IF NOT EXISTS skills_student ON skills(student, at);
+  CREATE TABLE IF NOT EXISTS domains (
+    student TEXT NOT NULL,
+    assignment TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    level INTEGER NOT NULL,
+    note TEXT,
+    at TEXT NOT NULL,
+    PRIMARY KEY (student, assignment, domain)
+  );
   `)
   // Columns added after the first release.
   const cols = (d.prepare('PRAGMA table_info(students)').all() as Array<{ name: string }>).map((c) => c.name)
@@ -88,6 +107,7 @@ function migrate(d: DatabaseSync) {
   if (!acols.includes('analysis')) d.exec('ALTER TABLE assignments ADD COLUMN analysis TEXT')
   const pcols = (d.prepare('PRAGMA table_info(packets)').all() as Array<{ name: string }>).map((c) => c.name)
   if (!pcols.includes('feedback')) d.exec('ALTER TABLE packets ADD COLUMN feedback TEXT')
+  if (!pcols.includes('analysedAt')) d.exec('ALTER TABLE packets ADD COLUMN analysedAt TEXT')
 }
 
 // ---------- students ----------
@@ -264,10 +284,47 @@ export function setPacketFeedback(student: string, assignment: string, feedback:
   getDb().prepare('UPDATE packets SET feedback = ? WHERE student = ? AND assignment = ?').run(feedback, student, assignment)
 }
 
+export function markAnalysed(student: string, assignment: string) {
+  getDb().prepare('UPDATE packets SET analysedAt = ? WHERE student = ? AND assignment = ?').run(new Date().toISOString(), student, assignment)
+}
+
+// ---------- skills ----------
+export interface SkillRow { student: string; assignment: string; name: string; level: 'secure' | 'developing' | 'not_yet'; evidence: string | null; at: string }
+export function replaceSkills(student: string, assignment: string, skills: Array<{ name: string; level: SkillRow['level']; evidence: string; at: string }>) {
+  const d = getDb()
+  d.prepare('DELETE FROM skills WHERE student = ? AND assignment = ?').run(student, assignment)
+  const ins = d.prepare('INSERT OR REPLACE INTO skills (student, assignment, name, level, evidence, at) VALUES (?,?,?,?,?,?)')
+  for (const k of skills) ins.run(student, assignment, k.name.trim().toLowerCase(), k.level, k.evidence, k.at)
+}
+export function skillsForStudent(student: string): SkillRow[] {
+  return getDb().prepare('SELECT * FROM skills WHERE student = ? ORDER BY at, name').all(student) as unknown as SkillRow[]
+}
+export function skillsForAssignment(assignment: string): SkillRow[] {
+  return getDb().prepare('SELECT * FROM skills WHERE assignment = ? ORDER BY student, name').all(assignment) as unknown as SkillRow[]
+}
+
+// ---------- domains: the rubric-like ratings, 1 to 4, per student per assignment ----------
+export interface DomainRow { student: string; assignment: string; domain: string; level: number; note: string | null; at: string }
+export function replaceDomains(student: string, assignment: string, rows: Array<{ domain: string; level: number; note: string | null }>, at: string) {
+  const d = getDb()
+  d.prepare('DELETE FROM domains WHERE student = ? AND assignment = ?').run(student, assignment)
+  const ins = d.prepare('INSERT OR REPLACE INTO domains (student, assignment, domain, level, note, at) VALUES (?,?,?,?,?,?)')
+  for (const r of rows) ins.run(student, assignment, r.domain, Math.max(1, Math.min(4, Math.round(r.level))), r.note, at)
+}
+export function domainsForAssignment(assignment: string): DomainRow[] {
+  return getDb().prepare('SELECT * FROM domains WHERE assignment = ? ORDER BY student, domain').all(assignment) as unknown as DomainRow[]
+}
+export function domainsForStudent(student: string): DomainRow[] {
+  return getDb().prepare('SELECT * FROM domains WHERE student = ? ORDER BY at, domain').all(student) as unknown as DomainRow[]
+}
+
 // ---------- meta ----------
 export function getMeta(key: string): string | null {
   const r = getDb().prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined
   return r?.value ?? null
+}
+export function metaWithPrefix(prefix: string): Array<{ key: string; value: string }> {
+  return getDb().prepare("SELECT key, value FROM meta WHERE key LIKE ? ESCAPE '\\'").all(`${prefix.replace(/[%_\\]/g, '\\$&')}%`) as Array<{ key: string; value: string }>
 }
 export function setMeta(key: string, value: string) {
   getDb().prepare('INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, value)

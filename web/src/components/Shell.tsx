@@ -43,6 +43,7 @@ export default function Shell() {
           <label htmlFor="q" className="vh">Search students or assignments</label>
           <input id="q" type="text" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search students or assignments" style={{ width: 240 }} />
         </form>
+        <NavLink to="/settings" className={({ isActive }) => `small ${isActive ? '' : 'muted'}`} style={{ padding: '16px 0' }} title="API key, model, how analysis runs">Settings</NavLink>
       </header>
       {stale && (
         <div className="notice" style={{ margin: '12px 32px 0', borderColor: 'var(--accent)' }} data-testid="stale-build">

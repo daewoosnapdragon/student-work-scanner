@@ -6,6 +6,8 @@ interface TodayData {
   feed: FeedPage[]
   stats: { pagesToday: number; packetsFiledToday: number; inReview: number; incomplete: number; oldestIncompleteMin: number | null; pagesWeek: number; packetsWeek: number }
   outstanding: Array<{ assignment: Assignment; missing: Student[]; total: number }>
+  noticing: { text: string; at: string; assignment: string } | null
+  analysisOn: boolean
 }
 interface Status { inbox: string; queued: number; busy: boolean; lastSeen: string | null }
 
@@ -78,7 +80,16 @@ export default function Today() {
         </div>
         <div className="col">
           <div className="over">Worth noticing</div>
-          <div className="notice">Analysis is not switched on yet. When it is, this corner will point out a student whose work has changed, with a link to the arc and a comparison.</div>
+          {data?.noticing ? (
+            <>
+              <p className="serif" style={{ margin: 0, fontSize: 21, lineHeight: 1.35, fontStyle: 'italic' }}>{data.noticing.text}</p>
+              <div><Link to={`/assignments/${data.noticing.assignment}`} className="btn">{data.noticing.assignment}</Link></div>
+            </>
+          ) : data?.analysisOn ? (
+            <div className="notice">Nothing yet. Analyse an assignment and the class summary leaves a note here about one student worth a look.</div>
+          ) : (
+            <div className="notice">Analysis is off. <Link to="/settings">Add a Claude API key in Settings</Link> and this corner will point out a student whose work has changed.</div>
+          )}
         </div>
       </section>
     </main>

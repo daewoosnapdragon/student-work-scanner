@@ -72,12 +72,45 @@ describe('splitting one student section into teacher and feedback parts', () => 
   })
   it('is all for the teacher when nothing marks a feedback part', () => {
     const r = splitStudentSection('Just notes.')
-    expect(r).toEqual({ teacher: 'Just notes.', feedback: null })
+    expect(r).toEqual({ teacher: 'Just notes.', feedback: null, domains: [] })
   })
   it('keeps the prompt asking for both parts', () => {
     const p = classPrompt({ code: 'W04', title: 'T', klass: 'K', grade: 4, tags: '' }, [{ code: '4S18', name: 'Lee Yoona', pages: 3 }])
     expect(p).toContain('### Teacher')
     expect(p).toContain('### Feedback')
     expect(p).toContain('grade 4')
+  })
+})
+
+describe('domain ratings in a pasted answer', () => {
+  const domains = ['Ideas and content', 'Organization', 'Language: grammar and vocabulary', 'Spelling and punctuation']
+  it('reads "- Domain: level — note" lines under a Domains heading, matching loosely', () => {
+    const r = splitStudentSection(`### Teacher
+Good contrast.
+### Feedback
+Nipun, lovely voice!
+### Domains
+- Ideas and content: 3 — real predictions
+- **Organization:** 4
+- Language: 2 — tense slips
+- spelling: 2/4 — were/where`, domains)
+    expect(r.teacher).toBe('Good contrast.')
+    expect(r.feedback).toBe('Nipun, lovely voice!')
+    expect(r.domains).toEqual([
+      { domain: 'Ideas and content', level: 3, note: 'real predictions' },
+      { domain: 'Organization', level: 4, note: null },
+      { domain: 'Language: grammar and vocabulary', level: 2, note: 'tense slips' },
+      { domain: 'Spelling and punctuation', level: 2, note: 'were/where' },
+    ])
+  })
+  it('leaves ordinary sentences with colons alone', () => {
+    const r = splitStudentSection('Teach next: irregular past tense.', domains)
+    expect(r.domains).toEqual([])
+    expect(r.teacher).toBe('Teach next: irregular past tense.')
+  })
+  it('the prompt lists the domains and shows the line shape', () => {
+    const p = classPrompt({ code: 'W04', title: 'T', klass: 'K', grade: 4, tags: '' }, [{ code: '4S18', name: 'Lee Yoona', pages: 3 }], domains)
+    expect(p).toContain('### Domains')
+    expect(p).toContain('- Ideas and content: 3')
   })
 })

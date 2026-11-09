@@ -6,7 +6,7 @@ import { ARCHIVE_DIR, DATA_DIR, HOLDING_DIR, INBOX_DIR, INCOMPLETE_AFTER_MIN, PD
 import { decodePage, makeThumb } from './decode.js'
 import { deletePacket, getAssignment, getStudent, hasSide, insertPage, nextSeq, openPackets, packetPages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
 import { broadcast } from './events.js'
-import type { Page, PageRef, Side } from '../shared/types.js'
+import type { Packet, Page, PageRef, Side } from '../shared/types.js'
 import { shortSide } from './codes.js'
 
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.tif', '.tiff', '.webp', '.bmp'])
@@ -106,7 +106,7 @@ export async function processImage(file: string, sourceName: string): Promise<Pa
     })
     const packet = refreshPacket(ref.student, ref.assignment, at)
     broadcast('page', { page: p, packet })
-    if (packet.complete) broadcast('packet', packet)
+    if (packet.complete) { broadcast('packet', packet); onComplete?.(packet) }
     return p
   }
 
@@ -154,8 +154,13 @@ export function fileFromReview(pageId: number, ref: PageRef, allowDuplicate = fa
   const packet = refreshPacket(ref.student, ref.assignment, p.scannedAt)
   const updated = getPage(pageId)!
   broadcast('page', { page: updated, packet })
+  if (packet.complete) onComplete?.(packet)
   return updated
 }
+
+// Set by the server at startup: what happens when a packet completes (the analysis step, when it is on).
+let onComplete: ((packet: Packet) => void) | null = null
+export function setOnPacketComplete(fn: (packet: Packet) => void) { onComplete = fn }
 
 export function skipFromReview(pageId: number, notWork = false): Page {
   const p = getPage(pageId)

@@ -3,7 +3,10 @@ import { Link, useParams } from 'react-router-dom'
 import { useFetch, fmtDate, fileUrl, sideLabel, type Assignment, type Packet, type Page, type Student } from '../api'
 
 interface PacketRow extends Packet { assignmentInfo: Assignment | null; pages: Page[] }
-interface Data { student: Student; packets: PacketRow[]; missing: Assignment[]; pages: Page[] }
+interface Skill { student: string; assignment: string; name: string; level: 'secure' | 'developing' | 'not_yet'; evidence: string | null; at: string }
+interface Rating { student: string; assignment: string; domain: string; level: number; note: string | null; at: string }
+interface Data { student: Student; packets: PacketRow[]; missing: Assignment[]; pages: Page[]; skills: Skill[]; ratings: Rating[]; domains: string[] }
+const LEVEL_BG: Record<number, string> = { 4: '#dff0e5', 3: '#eef5e9', 2: '#fff3d6', 1: '#f8dcd8' }
 
 export default function StudentPage() {
   const { code } = useParams()
@@ -36,7 +39,7 @@ export default function StudentPage() {
       <section className="grid2">
         <div className="col">
           <div className="over">Focus right now</div>
-          <div className="notice">Analysis is not switched on yet. Skills, the week-by-week arc and the focus notes will live here once it is.</div>
+          <Focus skills={data.skills} />
           <div className="row"><Link to={`/compare?left=${s.code}`} className="btn">Compare with a classmate</Link></div>
         </div>
         <div className="col">
@@ -50,6 +53,8 @@ export default function StudentPage() {
         </div>
       </section>
 
+      {data.skills.length > 0 && <Arc skills={data.skills} packets={packets} />}
+
       <section className="col sep" style={{ gap: 14 }}>
         <div className="between">
           <div><span className="serif" style={{ fontSize: 26, fontWeight: 700 }}>Work record</span> <span className="muted small" style={{ marginLeft: 8 }}>{packets.length} packets, newest first</span></div>
@@ -59,7 +64,7 @@ export default function StudentPage() {
             <thead><tr><th style={{ width: 80 }}>Date</th><th>Assignment</th><th>Tags</th><th style={{ width: 110 }}>Sides</th><th style={{ width: 90 }}>Score</th><th style={{ width: 90 }}></th></tr></thead>
             <tbody>
               {packets.map((p) => (
-                <PacketRows key={p.assignment} p={p} open={open === p.assignment} toggle={() => setOpen(open === p.assignment ? null : p.assignment)} />
+                <PacketRows key={p.assignment} p={p} ratings={data.ratings.filter((r) => r.assignment === p.assignment)} open={open === p.assignment} toggle={() => setOpen(open === p.assignment ? null : p.assignment)} />
               ))}
               {packets.length === 0 && <tr><td colSpan={6} className="muted">No packets yet.</td></tr>}
             </tbody>
@@ -70,14 +75,14 @@ export default function StudentPage() {
   )
 }
 
-function PacketRows({ p, open, toggle }: { p: PacketRow; open: boolean; toggle: () => void }) {
+function PacketRows({ p, ratings, open, toggle }: { p: PacketRow; ratings: Rating[]; open: boolean; toggle: () => void }) {
   const a = p.assignmentInfo
   return (
     <>
       <tr>
         <td className="muted">{fmtDate(p.lastAt)}</td>
         <td><Link to={`/assignments/${p.assignment}`} style={{ color: 'var(--ink)', fontWeight: 600 }}>{p.assignment}{a && ` · ${a.title}`}</Link>{a && <div className="muted small">{a.sheets} sheet{a.sheets === 1 ? '' : 's'}{a.twoSided ? ', both sides' : ''}</div>}</td>
-        <td className="small">{a?.tags || <span className="muted">—</span>}</td>
+        <td className="small">{a?.tags || <span className="muted">—</span>}{ratings.length > 0 && <div className="row" style={{ gap: 4, marginTop: 4 }}>{ratings.map((r) => <span key={r.domain} className="chip" title={`${r.domain}${r.note ? `: ${r.note}` : ''}`} style={{ background: LEVEL_BG[r.level], padding: '1px 6px', fontSize: 11 }}>{r.domain.split(':')[0].trim()} <b>{r.level}</b></span>)}</div>}</td>
         <td>{p.sides} of {p.expected}{p.closedIncomplete ? <div className="muted small">filed incomplete</div> : !p.complete ? <div className="muted small">still arriving</div> : null}</td>
         <td>{p.score != null ? `${p.score} of ${p.scoreOf ?? '?'}` : <span className="muted">—</span>}</td>
         <td><button className="btn" onClick={toggle}>{open ? 'Hide' : p.note ? 'Pages · analysis' : 'Pages'}</button></td>
@@ -101,5 +106,64 @@ function PacketRows({ p, open, toggle }: { p: PacketRow; open: boolean; toggle: 
         </td></tr>
       )}
     </>
+  )
+}
+
+
+const LEVEL_LABEL = { secure: 'secure', developing: 'developing', not_yet: 'not yet' } as const
+const LEVEL_COLOR = { secure: 'var(--green)', developing: '#c9a24a', not_yet: 'var(--accent)' } as const
+
+// The newest reading of each skill, the ones still developing first.
+function latestSkills(skills: Skill[]) {
+  const by = new Map<string, Skill>()
+  for (const k of [...skills].sort((a, b) => a.at.localeCompare(b.at))) by.set(k.name, k)
+  const order = { not_yet: 0, developing: 1, secure: 2 }
+  return [...by.values()].sort((a, b) => order[a.level] - order[b.level] || b.at.localeCompare(a.at))
+}
+
+function Focus({ skills }: { skills: Skill[] }) {
+  if (!skills.length) return <div className="notice">No analysis yet. Analyse a packet on its assignment page, or paste Claude's answer there, and the skills this student shows will gather here.</div>
+  const latest = latestSkills(skills)
+  const focus = latest.filter((k) => k.level !== 'secure').slice(0, 4)
+  const secure = latest.filter((k) => k.level === 'secure')
+  return (
+    <div className="col" style={{ gap: 10 }}>
+      {focus.length === 0 && <p style={{ margin: 0 }}>Everything the recent work shows is secure.</p>}
+      {focus.map((k) => (
+        <div key={k.name} style={{ borderLeft: `3px solid ${LEVEL_COLOR[k.level]}`, paddingLeft: 10 }}>
+          <div style={{ fontWeight: 600 }}>{k.name} <span className="muted small" style={{ fontWeight: 400 }}>· {LEVEL_LABEL[k.level]} · {k.assignment}</span></div>
+          {k.evidence && <div className="small muted">“{k.evidence}”</div>}
+        </div>
+      ))}
+      {secure.length > 0 && <div className="small"><span className="over quiet" style={{ fontSize: 10, marginRight: 8 }}>Secure</span>{secure.map((k) => k.name).join(' · ')}</div>}
+    </div>
+  )
+}
+
+// Skills across assignments, oldest to newest: a dot per reading.
+function Arc({ skills, packets }: { skills: Skill[]; packets: PacketRow[] }) {
+  const cols = [...new Set(skills.map((k) => k.assignment))].sort((a, b) => (skills.find((k) => k.assignment === a)!.at).localeCompare(skills.find((k) => k.assignment === b)!.at))
+  const names = latestSkills(skills).map((k) => k.name)
+  const titleOf = (code: string) => packets.find((p) => p.assignment === code)?.assignmentInfo?.title ?? code
+  return (
+    <section className="col sep" style={{ gap: 12 }}>
+      <div className="between">
+        <div><span className="serif" style={{ fontSize: 26, fontWeight: 700 }}>Skill arc</span> <span className="muted small" style={{ marginLeft: 8 }}>{cols.length} assignment{cols.length === 1 ? '' : 's'} analysed</span></div>
+        <div className="small row" style={{ gap: 14 }}>{(['secure', 'developing', 'not_yet'] as const).map((l) => <span key={l}><span className="dot" style={{ background: LEVEL_COLOR[l] }} />{LEVEL_LABEL[l]}</span>)}</div>
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table>
+          <thead><tr><th>Skill</th>{cols.map((c) => <tr key={c} style={{ display: 'contents' }}><th style={{ textAlign: 'center' }} title={titleOf(c)}>{c}<div className="muted" style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>{fmtDate(skills.find((k) => k.assignment === c)!.at)}</div></th></tr>)}</tr></thead>
+          <tbody>
+            {names.map((n) => (
+              <tr key={n}>
+                <td style={{ fontWeight: 600 }}>{n}</td>
+                {cols.map((c) => { const k = skills.find((x) => x.name === n && x.assignment === c); return <td key={c} style={{ textAlign: 'center' }} title={k ? `${LEVEL_LABEL[k.level]}${k.evidence ? `: ${k.evidence}` : ''}` : 'no sample'}>{k ? <span className="dot" style={{ background: LEVEL_COLOR[k.level], width: 12, height: 12, marginRight: 0 }} /> : <span className="muted">·</span>}</td> })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   )
 }

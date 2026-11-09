@@ -5,7 +5,7 @@ import QRCode from 'qrcode'
 import {
   allPackets, expectedFor, findStudentsByName, getAssignment, getPacket, getStudent, listAssignments, listStudents,
   packetPages, packetsForAssignment, packetsForStudent, pagesForStudent, pagesSince, recentPages, reviewPages,
-  setPacketScore, upsertAssignment, upsertStudent, closePacketIncomplete, getPage, getMeta, sidesFor, deleteAssignment,
+  setPacketScore, upsertAssignment, upsertStudent, closePacketIncomplete, getPage, getMeta, metaWithPrefix, sidesFor, deleteAssignment,
   refreshPacketsFor, setAssignmentAnalysis, setPacketFeedback,
 } from '../db.js'
 import { subscribe } from '../events.js'
@@ -13,6 +13,8 @@ import { guessesFor } from '../guesses.js'
 import { abs, fileFromReview, reorderPacket, skipAllInReview, skipFromReview, stalePackets, unfilePage } from '../pipeline.js'
 import { buildPdf } from '../pdf.js'
 import { classPrompt, splitClassAnswer, splitStudentSection } from '../analysis.js'
+import { enqueueAssignment, enqueueClass, enqueuePacket, getSettings, queueStatus, saveSettings, testKey, domainList, LEVELS } from '../claude.js'
+import { skillsForStudent, skillsForAssignment, domainsForAssignment, domainsForStudent, replaceDomains } from '../db.js'
 import { watcherStatus } from '../watcher.js'
 import { formatCode, sideLabel } from '../codes.js'
 import type { Assignment, ReviewItem, Side, Student } from '../../shared/types.js'
@@ -56,8 +58,22 @@ api.get('/today', (_req, res) => {
       packetsWeek: filedWeek,
     },
     outstanding: outstanding(),
+    noticing: latestNoticing(),
+    analysisOn: getSettings().hasKey,
   })
 })
+
+// The newest "worth noticing" line the class analysis wrote, with its assignment.
+function latestNoticing(): { text: string; at: string; assignment: string } | null {
+  let best: { text: string; at: string; assignment: string } | null = null
+  for (const row of metaWithPrefix('noticing:')) {
+    try {
+      const v = JSON.parse(row.value) as { text: string; at: string }
+      if (!best || v.at > best.at) best = { ...v, assignment: row.key.slice('noticing:'.length) }
+    } catch { /* an old value */ }
+  }
+  return best
+}
 
 function reviewCount() {
   return reviewPages().length + stalePackets().length
@@ -112,7 +128,7 @@ api.get('/students/:code', (req, res) => {
   const packets = packetsForStudent(s.code).map((p) => ({ ...p, assignmentInfo: getAssignment(p.assignment) ?? null, pages: packetPages(p.student, p.assignment) }))
   const assigned = listAssignments().filter((a) => a.klass === s.klass && (a.grade == null || s.grade == null || a.grade === s.grade))
   const missing = assigned.filter((a) => !getPacket(s.code, a.code))
-  res.json({ student: s, packets, missing, pages: pagesForStudent(s.code) })
+  res.json({ student: s, packets, missing, pages: pagesForStudent(s.code), skills: skillsForStudent(s.code), ratings: domainsForStudent(s.code), domains: domainList() })
 })
 
 // ---------- Assignments ----------
@@ -174,9 +190,10 @@ api.post('/assignments/:code/analysis/paste', (req, res) => {
   for (const [student, body] of byStudent) {
     const pk = packets.find((p) => p.student === student)
     if (!pk) continue
-    const parts = splitStudentSection(body)
+    const parts = splitStudentSection(body, domainList())
     setPacketScore(student, code, pk.score, pk.scoreOf, parts.teacher ?? body)
     if (parts.feedback) { setPacketFeedback(student, code, parts.feedback); withFeedback++ }
+    if (parts.domains.length) replaceDomains(student, code, parts.domains, pk.lastAt)
     filed.push(student)
   }
   if (klass) setAssignmentAnalysis(code, klass)
@@ -188,7 +205,7 @@ api.get('/assignments/:code/prompt', (req, res) => {
   const a = getAssignment(code)
   if (!a) return res.status(404).json({ error: 'no such assignment' })
   const students = packetsForAssignment(code).map((p) => ({ code: p.student, name: getStudent(p.student)?.name ?? p.student, pages: packetPages(p.student, code).length })).sort((x, y) => x.name.localeCompare(y.name))
-  res.type('text').send(classPrompt(a, students))
+  res.type('text').send(classPrompt(a, students, domainList()))
 })
 
 // The whole class as one PDF, students in name order, each page under a header line.
@@ -267,7 +284,8 @@ api.get('/assignments/:code', (req, res) => {
   const inReview = reviewPages().filter((p) => p.assignment === a.code).length
   const scored = [...packets.values()].filter((p) => p.score != null)
   const average = scored.length ? scored.reduce((t, p) => t + (p.score ?? 0), 0) / scored.length : null
-  res.json({ assignment: a, expected: expectedFor(a), students, inReview, average, scoredCount: scored.length })
+  const noticingRaw = getMeta(`noticing:${a.code}`)
+  res.json({ assignment: a, expected: expectedFor(a), students, inReview, average, scoredCount: scored.length, noticing: noticingRaw ? JSON.parse(noticingRaw) : null, analysisOn: getSettings().hasKey, domains: domainList(), ratings: domainsForAssignment(a.code) })
 })
 
 api.post('/packets/:assignment/:student/score', (req, res) => {
@@ -277,6 +295,15 @@ api.post('/packets/:assignment/:student/score', (req, res) => {
   setPacketScore(student, assignment, b.score == null ? null : Number(b.score), b.scoreOf == null ? null : Number(b.scoreOf), b.note ?? null)
   if (b.feedback !== undefined) setPacketFeedback(student, assignment, typeof b.feedback === 'string' && b.feedback.trim() ? b.feedback.trim() : null)
   res.json(getPacket(student, assignment))
+})
+
+api.post('/packets/:assignment/:student/domains', (req, res) => {
+  const assignment = req.params.assignment.toUpperCase(), student = req.params.student.toUpperCase()
+  const pk = getPacket(student, assignment)
+  if (!pk) return res.status(404).json({ error: 'no such packet' })
+  const rows = Array.isArray(req.body?.domains) ? (req.body.domains as Array<{ domain: string; level: number; note?: string | null }>).filter((r) => r.domain && r.level) : []
+  replaceDomains(student, assignment, rows.map((r) => ({ domain: String(r.domain), level: Number(r.level), note: r.note ?? null })), pk.lastAt)
+  res.json(domainsForAssignment(assignment).filter((r) => r.student === student))
 })
 
 // ---------- Compare ----------
@@ -373,6 +400,40 @@ api.post('/review/packet/:assignment/:student/close', (req, res) => {
   res.json(getPacket(student, assignment))
 })
 
+// ---------- Settings and the analysis step ----------
+api.get('/settings', (_req, res) => res.json(getSettings()))
+api.post('/settings', (req, res) => {
+  const b = req.body ?? {}
+  saveSettings({ apiKey: b.apiKey === undefined ? undefined : (b.apiKey || null), model: b.model, auto: b.auto === undefined ? undefined : !!b.auto, context: b.context, domains: Array.isArray(b.domains) ? b.domains.map(String) : undefined })
+  res.json(getSettings())
+})
+api.post('/settings/test', async (_req, res) => res.json(await testKey()))
+
+api.get('/analyse', (_req, res) => res.json(queueStatus()))
+api.post('/analyse/packet/:assignment/:student', (req, res) => {
+  const assignment = req.params.assignment.toUpperCase(), student = req.params.student.toUpperCase()
+  if (!getPacket(student, assignment)) return res.status(404).json({ error: 'no such packet' })
+  if (!getSettings().hasKey) return res.status(400).json({ error: 'No API key yet. Add one in Settings.' })
+  enqueuePacket(assignment, student)
+  res.json(queueStatus())
+})
+api.post('/analyse/assignment/:code', (req, res) => {
+  const code = req.params.code.toUpperCase()
+  if (!getAssignment(code)) return res.status(404).json({ error: 'no such assignment' })
+  if (!getSettings().hasKey) return res.status(400).json({ error: 'No API key yet. Add one in Settings.' })
+  const n = enqueueAssignment(code, !!req.body?.force)
+  res.json({ queued: n, ...queueStatus() })
+})
+api.post('/analyse/class/:code', (req, res) => {
+  const code = req.params.code.toUpperCase()
+  if (!getAssignment(code)) return res.status(404).json({ error: 'no such assignment' })
+  if (!getSettings().hasKey) return res.status(400).json({ error: 'No API key yet. Add one in Settings.' })
+  enqueueClass(code)
+  res.json(queueStatus())
+})
+api.get('/skills/student/:code', (req, res) => res.json(skillsForStudent(req.params.code.toUpperCase())))
+api.get('/skills/assignment/:code', (req, res) => res.json(skillsForAssignment(req.params.code.toUpperCase())))
+
 // ---------- Files ----------
 export const files = Router()
 files.get('/*path', (req, res) => {
@@ -455,6 +516,62 @@ footer{display:flex;justify-content:space-between;font-size:9pt;color:#6b6259;bo
 </style></head><body>
 <div class="bar"><button onclick="window.print()">Print, or save as PDF</button><span>${rows.length} slip${rows.length === 1 ? '' : 's'} · ${per} a page</span><a style="color:#fff" href="?per=${per === 1 ? 2 : 1}">${per === 1 ? 'Two a page' : 'One a page'}</a></div>
 ${chunk(slips, per).map((g) => `<div class="page">${g.join('')}</div>`).join('')}
+</body></html>`)
+})
+
+// The teacher's record of an assignment: students by domain in a landscape
+// table, then each student's notes and feedback, portrait. Print or save as PDF.
+print.get('/overview/:assignment', (req, res) => {
+  const a = getAssignment(req.params.assignment.toUpperCase())
+  if (!a) return res.status(404).send('no such assignment')
+  const domains = domainList()
+  const ratings = domainsForAssignment(a.code)
+  const rows = packetsForAssignment(a.code).map((p) => ({ p, s: getStudent(p.student) })).sort((x, y) => (x.s?.name ?? '').localeCompare(y.s?.name ?? ''))
+  if (!rows.length) return res.status(404).send('Nothing scanned for this assignment yet.')
+  const level = (student: string, domain: string) => ratings.find((r) => r.student === student && r.domain === domain)
+  const avg = (domain: string) => { const xs = ratings.filter((r) => r.domain === domain).map((r) => r.level); return xs.length ? (xs.reduce((t, x) => t + x, 0) / xs.length).toFixed(1) : '' }
+  const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+  const short = (d: string) => d.split(':')[0].trim()
+  const table = `<table><thead><tr><th>Student</th><th>Code</th><th class="n">Score</th>${domains.map((d) => `<th class="n" title="${esc(d)}">${esc(short(d))}</th>`).join('')}<th class="n">Sides</th></tr></thead><tbody>
+${rows.map(({ p, s }) => `<tr><td><b>${esc(s?.name ?? p.student)}</b>${s?.nameKo ? `<span class="ko">${esc(s.nameKo)}</span>` : ''}</td><td class="muted">${esc(p.student)}</td><td class="n">${p.score != null ? `${p.score}${p.scoreOf != null ? `/${p.scoreOf}` : ''}` : '—'}</td>${domains.map((d) => { const r = level(p.student, d); return `<td class="n lv${r?.level ?? 0}" title="${r?.note ? esc(r.note) : ''}">${r ? r.level : '·'}</td>` }).join('')}<td class="n muted">${p.sides}/${p.expected}</td></tr>`).join('\n')}
+</tbody><tfoot><tr><td colspan="3">Class average</td>${domains.map((d) => `<td class="n">${avg(d)}</td>`).join('')}<td></td></tr></tfoot></table>`
+  const records = rows.filter(({ p }) => p.note || p.feedback).map(({ p, s }) => {
+    const rs = domains.map((d) => level(p.student, d)).filter((r): r is NonNullable<typeof r> => !!r)
+    return `<section class="rec"><h2>${esc(s?.name ?? p.student)} <span class="muted">${esc(p.student)}${p.score != null ? ` · ${p.score}${p.scoreOf != null ? ` of ${p.scoreOf}` : ''}` : ''}</span></h2>
+    ${rs.length ? `<div class="chips">${rs.map((r) => `<span class="chip lv${r.level}"><b>${esc(short(r.domain))}</b> ${r.level} ${esc(LEVELS[r.level] ?? '')}${r.note ? ` · ${esc(r.note)}` : ''}</span>`).join('')}</div>` : ''}
+    <div class="two">${p.note ? `<div><div class="over">For the teacher</div>${p.note.split(/\n{2,}/).map((x) => `<p>${esc(x).replace(/\n/g, '<br>')}</p>`).join('')}</div>` : ''}${p.feedback ? `<div><div class="over">To the student</div>${p.feedback.split(/\n{2,}/).map((x) => `<p>${esc(x).replace(/\n/g, '<br>')}</p>`).join('')}</div>` : ''}</div></section>`
+  })
+  res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Record · ${esc(a.code)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+KR:wght@400;500&display=swap" rel="stylesheet">
+<style>
+@page{size:A4;margin:12mm}
+@page wide{size:A4 landscape;margin:12mm}
+body{margin:0;font-family:'IBM Plex Sans','Noto Sans KR',system-ui,sans-serif;color:#1f1b17;background:#fff;font-size:10pt}
+.sheet{page:wide;page-break-after:always}
+.over{font-size:8.5pt;letter-spacing:.14em;text-transform:uppercase;color:#8b1e1e;font-weight:600;margin-bottom:2mm}
+h1{font-family:'Playfair Display',Georgia,serif;font-size:20pt;margin:0 0 1mm}
+.sub{color:#6b6259;margin-bottom:5mm}
+table{width:100%;border-collapse:collapse;font-size:9.5pt}
+th{font-size:8pt;letter-spacing:.08em;text-transform:uppercase;color:#6b6259;text-align:left;padding:2mm;border-bottom:1px solid #d9d0c1;vertical-align:bottom}
+td{padding:1.6mm 2mm;border-bottom:1px solid #e6ddcf;vertical-align:top}
+tfoot td{border-top:2px solid #d9d0c1;border-bottom:0;font-weight:600}
+.n{text-align:center}.muted{color:#6b6259}.ko{display:block;font-size:8pt;color:#6b6259;font-family:'Noto Sans KR',sans-serif}
+.lv4{background:#dff0e5}.lv3{background:#eef5e9}.lv2{background:#fff3d6}.lv1{background:#f8dcd8}
+.key{display:flex;gap:6mm;font-size:8.5pt;color:#6b6259;margin-top:3mm}.key span{padding:0 2mm}
+.rec{page-break-inside:avoid;border-top:1px solid #d9d0c1;padding:4mm 0 5mm}
+.rec h2{font-family:'Playfair Display',Georgia,serif;font-size:14pt;margin:0 0 2mm}.rec h2 .muted{font-family:'IBM Plex Sans',sans-serif;font-size:9.5pt;font-weight:400}
+.chips{display:flex;flex-wrap:wrap;gap:1.5mm;margin-bottom:3mm}.chip{font-size:8.5pt;padding:.6mm 2mm;border-radius:2px;border:1px solid #e6ddcf}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:6mm}.two p{margin:0 0 1.5mm;line-height:1.45}
+.bar{position:fixed;top:0;left:0;right:0;background:#1f1b17;color:#fff;padding:8px 14px;font-size:13px;display:flex;gap:14px;align-items:center;z-index:9}
+.bar button{font:inherit;background:#8b1e1e;color:#fff;border:0;border-radius:3px;padding:5px 12px;cursor:pointer}
+@media print{.bar{display:none}}
+@media screen{body{padding:56px 24px 24px;max-width:1100px;margin:0 auto}.sheet{margin-bottom:12mm}}
+</style></head><body>
+<div class="bar"><button onclick="window.print()">Print, or save as PDF</button><span>${rows.length} students · the table prints landscape, the records portrait</span></div>
+<div class="sheet"><div class="over">${esc(a.klass)}${a.grade != null ? ` · Grade ${a.grade}` : ''} · ${esc(date)}</div><h1>${esc(a.code)} · ${esc(a.title)}</h1><div class="sub">Domain ratings 1 to 4 and scores for every student who turned the work in.${a.analysis ? ' The class summary follows the records.' : ''}</div>${table}
+<div class="key"><span class="lv4">4 Strong</span><span class="lv3">3 Secure</span><span class="lv2">2 Developing</span><span class="lv1">1 Beginning</span><span>· not rated</span></div></div>
+${records.length ? `<div class="over">Student records</div>${records.join('\n')}` : ''}
+${a.analysis ? `<section class="rec"><h2>What the class shows</h2>${a.analysis.split(/\n{2,}/).map((x) => `<p>${esc(x).replace(/\n/g, '<br>')}</p>`).join('')}</section>` : ''}
 </body></html>`)
 })
 

@@ -70,6 +70,14 @@ On an assignment's page: **Edit** changes its title, class, grade, sheets and si
 
 Analysis is a round trip for now: **Copy prompt** puts a prompt on the clipboard that names the assignment and every student by code and asks for one section per student plus a Class section; give it to Claude with the PDF, then **Paste class answer** splits the reply by code into each student's Analysis box and the class's What the class shows. Both boxes can also be typed into by hand, and the student's analysis shows on their page.
 
+## Switching on analysis
+
+Settings (top right) takes a Claude API key from console.anthropic.com; it is stored in this program's database on this computer and nowhere else. With a key saved, an assignment's page gets **Analyse with Claude**: each packet's pages go to Claude with the assignment's context and back come the teacher's notes, the student's feedback, a score where one applies, the skills shown, and a 1 to 4 rating on each domain; then the class summary and a "worth noticing" line for Today. Packets run one at a time in the background and the page follows along. Tick the option in Settings to analyse each packet on its own the moment its last side is scanned. The model is Claude Opus 5.5 unless changed; a class set of about 25 packets costs roughly a dollar.
+
+The domains (Ideas and content, Organization, Language, Spelling and punctuation, Handwriting and presentation, Task completion by default) are a list in Settings. The assignment page shows an overview table of students by domain, each packet's chips can be rated by hand, and **Print record** prints the table in landscape followed by every student's notes and feedback, for the teacher's files. The student page gathers the skills into Focus right now and a skill arc across assignments.
+
+Without a key, the manual round trip still works: Class PDF, Copy prompt (which asks for the same Teacher, Feedback and Domains parts), Paste class answer.
+
 ## Printing from Worksheet Studio
 
 Worksheet Studio's Print… dialog has a Class set row. It reads the class list from this program (at `http://localhost:4710`, so the scanner must be running on the same computer, or have been once), prints one copy per student with the code already in the corner and the name on the name line, and registers the assignment here. Nothing to stick on.
@@ -101,7 +109,7 @@ Assignments are added on the Assignments page. An assignment belongs to a class 
 
 ## Layout
 
-- `server/` Express API, SQLite (Node's built-in `node:sqlite`, so no native build step), the watcher, decoder and filing pipeline.
+- `server/` Express API, SQLite (Node's built-in `node:sqlite`, so no native build step), the watcher, decoder and filing pipeline, the Claude analysis step (`claude.ts`) and the pasted-answer parser (`analysis.ts`).
 - `web/` Vite and React. Six screens, styled from the mockup.
 - `shared/types.ts` the shapes both sides use.
 - `scripts/` roster import, demo seed, sample scan generator (uses whatever roster is loaded), `decode-check.ts` to test the decoder on real scans that are not being read.
@@ -110,6 +118,6 @@ Assignments are added on the Assignments page. An assignment belongs to a class 
 
 ## Not in yet
 
-- Analysis of the work itself (the Claude API step the mockup shows): skill arcs, per-question crops, focus notes, class summaries, the written comparison, Ask the archive.
+- Per-question crops on the assignment page, the written comparison on Compare, and Ask the archive.
 - A students page for adding and editing the roster; it is the CSV import and the API only.
 - Phone-camera input. The watcher only handles files that land in the folder.

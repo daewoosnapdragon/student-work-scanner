@@ -73,6 +73,8 @@ export interface Packet {
   note: string | null
   /** Feedback written for the student to read, printed as a slip. */
   feedback: string | null
+  /** When the analysis step last read this packet; null if never. */
+  analysedAt: string | null
 }
 
 export interface Guess {
@@ -97,7 +99,7 @@ export interface ReviewItem {
 }
 
 export interface FeedEvent {
-  type: 'page' | 'review' | 'packet' | 'status' | 'hello'
+  type: 'page' | 'review' | 'packet' | 'status' | 'hello' | 'analysis'
   at: string
   payload: unknown
 }
