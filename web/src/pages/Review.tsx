@@ -194,7 +194,10 @@ export default function Review() {
       <section className="col sep">
         <div className="between">
           <div className="over">The queue</div>
-          {items.some((i) => i.kind === 'page') && <button className="btn" onClick={() => void skipAll()}>Skip everything in the queue</button>}
+          <div className="row">
+            {items.filter((i) => i.kind === 'page' && i.pageId && !data.pages[i.pageId]?.decoded).length > 1 && <Link className="btn primary" to="/review/stack" title="Pages scanned in order without codes: one assignment, cut into packets, a student each">File a stack</Link>}
+            {items.some((i) => i.kind === 'page') && <button className="btn" onClick={() => void skipAll()}>Skip everything in the queue</button>}
+          </div>
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table>

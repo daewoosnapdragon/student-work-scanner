@@ -10,6 +10,7 @@ import Assignments from './pages/Assignments'
 import AssignmentPage from './pages/Assignment'
 import Compare from './pages/Compare'
 import Review from './pages/Review'
+import Stack from './pages/Stack'
 
 const router = createBrowserRouter([
   {
@@ -23,6 +24,7 @@ const router = createBrowserRouter([
       { path: 'assignments/:code', element: <AssignmentPage /> },
       { path: 'compare', element: <Compare /> },
       { path: 'review', element: <Review /> },
+      { path: 'review/stack', element: <Stack /> },
     ],
   },
 ])

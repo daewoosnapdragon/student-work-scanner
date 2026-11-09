@@ -79,7 +79,8 @@ async function makePage(spec: Spec, i: number) {
     ${writing}
     ${[0, 1, 2, 3, 4].map((k) => `<line x1="120" y1="${1000 + k * 120}" x2="${W - 120}" y2="${1000 + k * 120}" stroke="#e6ddcf" stroke-width="2"/>`).join('')}
   </svg>`
-  const composites: sharp.OverlayOptions[] = [{ input: qrPng, left: W - 180 - 80, top: 80 }]
+  // --nocode: work from before the codes existed, for trying File a stack
+  const composites: sharp.OverlayOptions[] = process.argv.includes('--nocode') ? [] : [{ input: qrPng, left: W - 180 - 80, top: 80 }]
   if (spec.torn) {
     // A ragged white patch over most of the code, like a torn corner.
     const tear = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"><polygon points="${W - 300},0 ${W},0 ${W},320 ${W - 120},300 ${W - 200},200 ${W - 260},120" fill="#ffffff"/></svg>`)

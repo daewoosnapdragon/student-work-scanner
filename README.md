@@ -58,6 +58,10 @@ Review is keyboard first: J and K move, 1 to 3 pick a guess, Enter files, X skip
 
 Before the first run, empty the scan folder of old scans, or expect them all in review.
 
+### Work from before the codes
+
+Scan the pile in order, fronts and backs as the scanner feeds them, and open Review, then File a stack. Choose the assignment (or make it there). The stack is cut into one packet per student, so many sides each, and every packet gets the next student on the roster who has not turned that work in, in name order. Check the names against the page thumbnails, change any that are wrong, give a student with fewer or more sides their own count, click a page to leave it out, then file the lot. Pages file the same way coded ones do.
+
 ## Printing from Worksheet Studio
 
 Worksheet Studio's Print… dialog has a Class set row. It reads the class list from this program (at `http://localhost:4710`, so the scanner must be running on the same computer, or have been once), prints one copy per student with the code already in the corner and the name on the name line, and registers the assignment here. Nothing to stick on.
