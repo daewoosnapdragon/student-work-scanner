@@ -13,9 +13,9 @@ import { guessesFor } from '../guesses.js'
 import { abs, fileFromReview, reorderPacket, skipAllInReview, skipFromReview, stalePackets, unfilePage } from '../pipeline.js'
 import { buildPdf } from '../pdf.js'
 import { classPrompt, splitClassAnswer, splitStudentSection } from '../analysis.js'
-import { enqueueAssignment, enqueueClass, enqueuePacket, getSettings, queueStatus, saveSettings, testKey, domainList, LEVELS } from '../claude.js'
-import { skillsForStudent, skillsForAssignment, domainsForAssignment, domainsForStudent, replaceDomains, setPacketCorrections } from '../db.js'
-import { parseCorrectionLines, parseCorrections } from '../../shared/types.js'
+import { enqueueAssignment, enqueueClass, enqueuePacket, getSettings, queueStatus, saveSettings, testKey, domainList, domainsFor, LEVELS } from '../claude.js'
+import { skillsForStudent, skillsForAssignment, domainsForAssignment, domainsForStudent, replaceDomains, setPacketCorrections, setPacketCriteria, setAssignmentRubric } from '../db.js'
+import { parseCorrectionLines, parseCorrections, parseCriteria, parseRubric, DEFAULT_RUBRIC, type Rubric } from '../../shared/types.js'
 import { watcherStatus } from '../watcher.js'
 import { formatCode, sideLabel } from '../codes.js'
 import type { Assignment, ReviewItem, Side, Student } from '../../shared/types.js'
@@ -145,12 +145,16 @@ api.get('/assignments', (_req, res) => {
 api.post('/assignments', (req, res) => {
   const b = req.body ?? {}
   if (!b.code || !b.title || !b.klass) return res.status(400).json({ error: 'code, title and class are required' })
+  const code = String(b.code).toUpperCase()
+  const before = getAssignment(code)
   upsertAssignment({
-    code: String(b.code).toUpperCase(), title: b.title, klass: b.klass, grade: b.grade ?? null, assignedOn: b.assignedOn ?? null,
+    code, title: b.title, klass: b.klass, grade: b.grade ?? null, assignedOn: b.assignedOn ?? null,
     sheets: Number(b.sheets ?? 1), twoSided: b.twoSided ? 1 : 0, tags: b.tags ?? '', notes: b.notes ?? null,
     sides: b.sides == null ? null : Number(b.sides),
   })
-  res.json(getAssignment(String(b.code).toUpperCase()))
+  // a rubric seed from Worksheet Studio (the worksheet's objective and skill) fills a rubric the teacher has not written yet
+  if (b.rubric && typeof b.rubric === 'object' && !before?.rubric) setAssignmentRubric(code, JSON.stringify(cleanRubric(b.rubric)))
+  res.json(getAssignment(code))
 })
 
 // Edit an assignment. The code stays: it is printed on pages already. Sheets
@@ -167,6 +171,29 @@ api.put('/assignments/:code', (req, res) => {
   })
   refreshPacketsFor(code)
   res.json(getAssignment(code))
+})
+
+function cleanRubric(b: Partial<Rubric>): Rubric {
+  const r = { ...DEFAULT_RUBRIC, ...b }
+  return {
+    criteria: Array.isArray(r.criteria) ? r.criteria.map(String).map((c) => c.trim()).filter(Boolean).slice(0, 12) : [],
+    propose: r.propose !== false,
+    domains: Array.isArray(r.domains) ? r.domains.map(String) : null,
+    domainNotes: r.domainNotes && typeof r.domainNotes === 'object' ? Object.fromEntries(Object.entries(r.domainNotes).filter(([, v]) => typeof v === 'string' && v.trim()).map(([k, v]) => [k, String(v).trim()])) : {},
+    focus: Array.isArray(r.focus) ? r.focus.map(String).map((c) => c.trim()).filter(Boolean).slice(0, 8) : [],
+    tone: (['warm', 'plain', 'playful'] as const).includes(r.tone) ? r.tone : 'warm',
+    length: (['short', 'standard', 'full'] as const).includes(r.length) ? r.length : 'standard',
+    fixitMax: Math.max(0, Math.min(10, Number(r.fixitMax ?? 6) || 6)),
+    scoring: (['none', 'holistic4', 'outOf'] as const).includes(r.scoring) ? r.scoring : 'holistic4',
+    scoreOf: r.scoring === 'outOf' && r.scoreOf ? Number(r.scoreOf) : null,
+  }
+}
+
+api.put('/assignments/:code/rubric', (req, res) => {
+  const code = req.params.code.toUpperCase()
+  if (!getAssignment(code)) return res.status(404).json({ error: 'no such assignment' })
+  setAssignmentRubric(code, JSON.stringify(cleanRubric(req.body ?? {})))
+  res.json(parseRubric(getAssignment(code)!.rubric))
 })
 
 api.post('/assignments/:code/analysis', (req, res) => {
@@ -196,6 +223,7 @@ api.post('/assignments/:code/analysis/paste', (req, res) => {
     if (parts.feedback) { setPacketFeedback(student, code, parts.feedback); withFeedback++ }
     if (parts.domains.length) replaceDomains(student, code, parts.domains, pk.lastAt)
     if (parts.corrections.length) setPacketCorrections(student, code, parts.corrections)
+    if (parts.criteria.length) setPacketCriteria(student, code, parts.criteria)
     filed.push(student)
   }
   if (klass) setAssignmentAnalysis(code, klass)
@@ -207,7 +235,8 @@ api.get('/assignments/:code/prompt', (req, res) => {
   const a = getAssignment(code)
   if (!a) return res.status(404).json({ error: 'no such assignment' })
   const students = packetsForAssignment(code).map((p) => ({ code: p.student, name: getStudent(p.student)?.name ?? p.student, pages: packetPages(p.student, code).length })).sort((x, y) => x.name.localeCompare(y.name))
-  res.type('text').send(classPrompt(a, students, domainList()))
+  const rubric = parseRubric(a.rubric)
+  res.type('text').send(classPrompt(a, students, domainsFor(rubric), rubric))
 })
 
 // The whole class as one PDF, students in name order, each page under a header line.
@@ -287,7 +316,8 @@ api.get('/assignments/:code', (req, res) => {
   const scored = [...packets.values()].filter((p) => p.score != null)
   const average = scored.length ? scored.reduce((t, p) => t + (p.score ?? 0), 0) / scored.length : null
   const noticingRaw = getMeta(`noticing:${a.code}`)
-  res.json({ assignment: a, expected: expectedFor(a), students, inReview, average, scoredCount: scored.length, noticing: noticingRaw ? JSON.parse(noticingRaw) : null, analysisOn: getSettings().hasKey, domains: domainList(), ratings: domainsForAssignment(a.code) })
+  const rubric = parseRubric(a.rubric)
+  res.json({ assignment: a, expected: expectedFor(a), students, inReview, average, scoredCount: scored.length, noticing: noticingRaw ? JSON.parse(noticingRaw) : null, analysisOn: getSettings().hasKey, domains: domainsFor(rubric), allDomains: domainList(), rubric, ratings: domainsForAssignment(a.code) })
 })
 
 api.post('/packets/:assignment/:student/score', (req, res) => {
@@ -532,21 +562,25 @@ footer{display:flex;justify-content:space-between;font-size:8.5pt;color:#6b6259;
 print.get('/overview/:assignment', (req, res) => {
   const a = getAssignment(req.params.assignment.toUpperCase())
   if (!a) return res.status(404).send('no such assignment')
-  const domains = domainList()
+  const rubric = parseRubric(a.rubric)
+  const domains = domainsFor(rubric)
   const ratings = domainsForAssignment(a.code)
   const rows = packetsForAssignment(a.code).map((p) => ({ p, s: getStudent(p.student) })).sort((x, y) => (x.s?.name ?? '').localeCompare(y.s?.name ?? ''))
   if (!rows.length) return res.status(404).send('Nothing scanned for this assignment yet.')
+  const anyCriteria = rows.some(({ p }) => parseCriteria(p.criteria).length)
+  const metCount = (p: { criteria: string | null }) => { const cs = parseCriteria(p.criteria); return cs.length ? `${cs.filter((c) => c.met).length}/${cs.length}` : '' }
   const level = (student: string, domain: string) => ratings.find((r) => r.student === student && r.domain === domain)
   const avg = (domain: string) => { const xs = ratings.filter((r) => r.domain === domain).map((r) => r.level); return xs.length ? (xs.reduce((t, x) => t + x, 0) / xs.length).toFixed(1) : '' }
   const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
   const short = (d: string) => d.split(':')[0].trim()
-  const table = `<table><thead><tr><th>Student</th><th>Code</th><th class="n">Score</th>${domains.map((d) => `<th class="n" title="${esc(d)}">${esc(short(d))}</th>`).join('')}<th class="n">Sides</th></tr></thead><tbody>
-${rows.map(({ p, s }) => `<tr><td><b>${esc(s?.name ?? p.student)}</b>${s?.nameKo ? `<span class="ko">${esc(s.nameKo)}</span>` : ''}</td><td class="muted">${esc(p.student)}</td><td class="n">${p.score != null ? `${p.score}${p.scoreOf != null ? `/${p.scoreOf}` : ''}` : '—'}</td>${domains.map((d) => { const r = level(p.student, d); return `<td class="n lv${r?.level ?? 0}" title="${r?.note ? esc(r.note) : ''}">${r ? r.level : '·'}</td>` }).join('')}<td class="n muted">${p.sides}/${p.expected}</td></tr>`).join('\n')}
-</tbody><tfoot><tr><td colspan="3">Class average</td>${domains.map((d) => `<td class="n">${avg(d)}</td>`).join('')}<td></td></tr></tfoot></table>`
+  const table = `<table><thead><tr><th>Student</th><th>Code</th><th class="n">Score</th>${anyCriteria ? '<th class="n">Criteria met</th>' : ''}${domains.map((d) => `<th class="n" title="${esc(d)}">${esc(short(d))}</th>`).join('')}<th class="n">Sides</th></tr></thead><tbody>
+${rows.map(({ p, s }) => `<tr><td><b>${esc(s?.name ?? p.student)}</b>${s?.nameKo ? `<span class="ko">${esc(s.nameKo)}</span>` : ''}</td><td class="muted">${esc(p.student)}</td><td class="n">${p.score != null ? `${p.score}${p.scoreOf != null ? `/${p.scoreOf}` : ''}` : '—'}</td>${anyCriteria ? `<td class="n">${metCount(p)}</td>` : ''}${domains.map((d) => { const r = level(p.student, d); return `<td class="n lv${r?.level ?? 0}" title="${r?.note ? esc(r.note) : ''}">${r ? r.level : '·'}</td>` }).join('')}<td class="n muted">${p.sides}/${p.expected}</td></tr>`).join('\n')}
+</tbody><tfoot><tr><td colspan="${anyCriteria ? 4 : 3}">Class average</td>${domains.map((d) => `<td class="n">${avg(d)}</td>`).join('')}<td></td></tr></tfoot></table>`
   const records = rows.filter(({ p }) => p.note || p.feedback).map(({ p, s }) => {
     const rs = domains.map((d) => level(p.student, d)).filter((r): r is NonNullable<typeof r> => !!r)
     return `<section class="rec"><h2>${esc(s?.name ?? p.student)} <span class="muted">${esc(p.student)}${p.score != null ? ` · ${p.score}${p.scoreOf != null ? ` of ${p.scoreOf}` : ''}` : ''}</span></h2>
     ${rs.length ? `<div class="chips">${rs.map((r) => `<span class="chip lv${r.level}"><b>${esc(short(r.domain))}</b> ${r.level} ${esc(LEVELS[r.level] ?? '')}${r.note ? ` · ${esc(r.note)}` : ''}</span>`).join('')}</div>` : ''}
+    ${parseCriteria(p.criteria).length ? `<ul class="crit">${parseCriteria(p.criteria).map((c) => `<li class="${c.met ? 'met' : 'not'}"><span>${c.met ? '✓' : '✗'}</span> ${esc(c.criterion)}${c.evidence ? ` <i>· ${esc(c.evidence)}</i>` : ''}</li>`).join('')}</ul>` : ''}
     <div class="two">${p.note ? `<div><div class="over">For the teacher</div>${p.note.split(/\n{2,}/).map((x) => `<p>${esc(x).replace(/\n/g, '<br>')}</p>`).join('')}</div>` : ''}${p.feedback ? `<div><div class="over">To the student</div>${p.feedback.split(/\n{2,}/).map((x) => `<p>${esc(x).replace(/\n/g, '<br>')}</p>`).join('')}</div>` : ''}</div></section>`
   })
   res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Record · ${esc(a.code)}</title>
@@ -570,6 +604,7 @@ tfoot td{border-top:2px solid #d9d0c1;border-bottom:0;font-weight:600}
 .rec h2{font-family:'Playfair Display',Georgia,serif;font-size:14pt;margin:0 0 2mm}.rec h2 .muted{font-family:'IBM Plex Sans',sans-serif;font-size:9.5pt;font-weight:400}
 .chips{display:flex;flex-wrap:wrap;gap:1.5mm;margin-bottom:3mm}.chip{font-size:8.5pt;padding:.6mm 2mm;border-radius:2px;border:1px solid #e6ddcf}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:6mm}.two p{margin:0 0 1.5mm;line-height:1.45}
+.crit{list-style:none;margin:0 0 3mm;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:1mm 6mm;font-size:9pt}.crit li span{display:inline-block;width:4mm;font-weight:700}.crit .met span{color:#2f7d4f}.crit .not span{color:#8b1e1e}.crit i{color:#6b6259}
 .bar{position:fixed;top:0;left:0;right:0;background:#1f1b17;color:#fff;padding:8px 14px;font-size:13px;display:flex;gap:14px;align-items:center;z-index:9}
 .bar button{font:inherit;background:#8b1e1e;color:#fff;border:0;border-radius:3px;padding:5px 12px;cursor:pointer}
 @media print{.bar{display:none}}

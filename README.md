@@ -76,6 +76,8 @@ Settings (top right) takes a Claude API key from console.anthropic.com; it is st
 
 The domains (Ideas and content, Organization, Language, Spelling and punctuation, Task completion by default) are a list in Settings. The assignment page shows an overview table of students by domain, each packet's chips can be rated by hand, and **Print record** prints the table in landscape followed by every student's notes and feedback, for the teacher's files. The student page gathers the skills into Focus right now and a skill arc across assignments.
 
+Each assignment has a **Rubric** card, read by Analyse with Claude and by Copy prompt alike: success criteria (one a line, each checked met or not yet for every student; empty, Claude works them out from the worksheet), which domains apply and what a 4 looks like for this task, a focus (what you have been teaching), tone and length of the student note, the fix-it row cap, and how to score (1 to 4 holistic, out of N, or not at all). The student's note never mentions the score. When Worksheet Studio prints a class set it seeds the rubric with the worksheet's objective and skill.
+
 Without a key, the manual round trip still works: Class PDF, Copy prompt (which asks for the same Teacher, Feedback and Domains parts), Paste class answer.
 
 ## Printing from Worksheet Studio

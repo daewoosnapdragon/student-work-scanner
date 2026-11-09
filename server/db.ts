@@ -105,10 +105,12 @@ function migrate(d: DatabaseSync) {
   const acols = (d.prepare('PRAGMA table_info(assignments)').all() as Array<{ name: string }>).map((c) => c.name)
   if (!acols.includes('sides')) d.exec('ALTER TABLE assignments ADD COLUMN sides INTEGER')
   if (!acols.includes('analysis')) d.exec('ALTER TABLE assignments ADD COLUMN analysis TEXT')
+  if (!acols.includes('rubric')) d.exec('ALTER TABLE assignments ADD COLUMN rubric TEXT')
   const pcols = (d.prepare('PRAGMA table_info(packets)').all() as Array<{ name: string }>).map((c) => c.name)
   if (!pcols.includes('feedback')) d.exec('ALTER TABLE packets ADD COLUMN feedback TEXT')
   if (!pcols.includes('analysedAt')) d.exec('ALTER TABLE packets ADD COLUMN analysedAt TEXT')
   if (!pcols.includes('corrections')) d.exec('ALTER TABLE packets ADD COLUMN corrections TEXT')
+  if (!pcols.includes('criteria')) d.exec('ALTER TABLE packets ADD COLUMN criteria TEXT')
 }
 
 // ---------- students ----------
@@ -143,7 +145,7 @@ export function listAssignments(): Assignment[] {
 export function getAssignment(code: string): Assignment | undefined {
   return getDb().prepare('SELECT * FROM assignments WHERE code = ?').get(code) as unknown as Assignment | undefined
 }
-export function upsertAssignment(a: Omit<Assignment, 'createdAt' | 'sides' | 'analysis'> & { sides?: number | null }) {
+export function upsertAssignment(a: Omit<Assignment, 'createdAt' | 'sides' | 'analysis' | 'rubric'> & { sides?: number | null }) {
   getDb()
     .prepare(
       `INSERT INTO assignments (code,title,klass,grade,assignedOn,sheets,twoSided,tags,notes,sides) VALUES (?,?,?,?,?,?,?,?,?,?)
@@ -151,6 +153,12 @@ export function upsertAssignment(a: Omit<Assignment, 'createdAt' | 'sides' | 'an
        assignedOn=excluded.assignedOn, sheets=excluded.sheets, twoSided=excluded.twoSided, tags=excluded.tags, notes=excluded.notes, sides=excluded.sides`,
     )
     .run(a.code, a.title, a.klass, a.grade ?? null, a.assignedOn ?? null, a.sheets, a.twoSided, a.tags ?? '', a.notes ?? null, a.sides ?? null)
+}
+export function setAssignmentRubric(code: string, rubric: string | null) {
+  getDb().prepare('UPDATE assignments SET rubric = ? WHERE code = ?').run(rubric, code)
+}
+export function setPacketCriteria(student: string, assignment: string, criteria: Array<{ criterion: string; met: boolean; evidence: string | null }> | null) {
+  getDb().prepare('UPDATE packets SET criteria = ? WHERE student = ? AND assignment = ?').run(criteria && criteria.length ? JSON.stringify(criteria) : null, student, assignment)
 }
 export function setAssignmentAnalysis(code: string, analysis: string | null) {
   getDb().prepare('UPDATE assignments SET analysis = ? WHERE code = ?').run(analysis, code)

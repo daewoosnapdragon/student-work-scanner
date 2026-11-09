@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { post, useFetch, fmtDate, fileUrl, sideLabel, type Assignment, type Packet, type Page, type Student } from '../api'
-import { parseCorrectionLines, parseCorrections } from '../../../shared/types'
+import { parseCorrectionLines, parseCorrections, parseCriteria, type Rubric } from '../../../shared/types'
 
 interface Row extends Student { packet: Packet | null; pages: Page[] }
 interface Rating { student: string; assignment: string; domain: string; level: number; note: string | null }
-interface Data { assignment: Assignment; expected: number; students: Row[]; inReview: number; average: number | null; scoredCount: number; noticing: { text: string; at: string } | null; analysisOn: boolean; domains: string[]; ratings: Rating[] }
+interface Data { assignment: Assignment; expected: number; students: Row[]; inReview: number; average: number | null; scoredCount: number; noticing: { text: string; at: string } | null; analysisOn: boolean; domains: string[]; allDomains: string[]; rubric: Rubric; ratings: Rating[] }
 const LEVEL_NAME: Record<number, string> = { 4: 'Strong', 3: 'Secure', 2: 'Developing', 1: 'Beginning' }
 const LEVEL_BG: Record<number, string> = { 4: '#dff0e5', 3: '#eef5e9', 2: '#fff3d6', 1: '#f8dcd8' }
 const shortDomain = (d: string) => d.split(':')[0].trim()
@@ -67,6 +67,8 @@ export default function AssignmentPage() {
         <div className="stat"><div className="over quiet">Class average</div><div className="num">{data.average != null ? data.average.toFixed(1) : '—'}{data.average != null && scoreOf != null && <small> of {scoreOf}</small>}</div><div className="muted small">{data.scoredCount} scored</div></div>
         <div className="stat"><div className="over quiet">In review</div><div className="num"><Link to="/review">{data.inReview}</Link></div></div>
       </section>
+
+      <RubricCard key={`${a.code}:${JSON.stringify(data.rubric)}`} a={a} rubric={data.rubric} allDomains={data.allDomains} onSaved={() => setBump((b) => b + 1)} />
 
       {inRows.length > 0 && (
         <section className="col" style={{ gap: 10 }}>
@@ -232,6 +234,12 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings }: {
         ))}
       </div>
       <div className="muted small">Pages out of order? The arrows move a page; sides are renumbered by position. × sends a page back to Review.</div>
+      {parseCriteria(p.criteria).length > 0 && (
+        <div className="row" style={{ gap: 6 }}>
+          <span className="over quiet" style={{ fontSize: 10, marginRight: 4 }}>Criteria</span>
+          {parseCriteria(p.criteria).map((c) => <span key={c.criterion} className="chip" title={c.evidence ?? ''} style={{ background: c.met ? '#dff0e5' : '#f8dcd8' }}><b style={{ color: c.met ? 'var(--green)' : 'var(--accent)' }}>{c.met ? '✓' : '✗'}</b> {c.criterion}</span>)}
+        </div>
+      )}
       <div className="row" style={{ gap: 6 }}>
         <span className="over quiet" style={{ fontSize: 10, marginRight: 4 }}>Domains</span>
         {domains.map((d) => {
@@ -406,22 +414,93 @@ function ClassAnalysis({ a, onSaved }: { a: Assignment; onSaved: () => void }) {
 function Overview({ rows, domains, ratings, onPick }: { rows: Row[]; domains: string[]; ratings: Rating[]; onPick: (code: string) => void }) {
   const level = (student: string, d: string) => ratings.find((r) => r.student === student && r.domain === d)
   const avg = (d: string) => { const xs = ratings.filter((r) => r.domain === d).map((r) => r.level); return xs.length ? (xs.reduce((t, x) => t + x, 0) / xs.length).toFixed(1) : '' }
-  if (!ratings.length) return <div className="notice">No domain ratings yet. Analyse the assignment, paste Claude's answer, or click a student and Rate.</div>
+  const anyCriteria = rows.some((r) => parseCriteria(r.packet!.criteria).length)
+  if (!ratings.length && !anyCriteria) return <div className="notice">No domain ratings yet. Analyse the assignment, paste Claude's answer, or click a student and Rate.</div>
   return (
     <div style={{ overflowX: 'auto' }}>
       <table>
-        <thead><tr><th>Student</th><th style={{ textAlign: 'center' }}>Score</th>{domains.map((d) => <th key={d} style={{ textAlign: 'center' }} title={d}>{shortDomain(d)}</th>)}</tr></thead>
+        <thead><tr><th>Student</th><th style={{ textAlign: 'center' }}>Score</th>{anyCriteria && <th style={{ textAlign: 'center' }}>Criteria</th>}{domains.map((d) => <th key={d} style={{ textAlign: 'center' }} title={d}>{shortDomain(d)}</th>)}</tr></thead>
         <tbody>
           {rows.map((r) => (
             <tr key={r.code} style={{ cursor: 'pointer' }} onClick={() => onPick(r.code)}>
               <td style={{ fontWeight: 600 }}>{r.name}</td>
               <td style={{ textAlign: 'center' }}>{r.packet!.score != null ? `${r.packet!.score}${r.packet!.scoreOf != null ? `/${r.packet!.scoreOf}` : ''}` : <span className="muted">—</span>}</td>
+              {anyCriteria && <td style={{ textAlign: 'center' }} title={parseCriteria(r.packet!.criteria).map((c) => `${c.met ? '✓' : '✗'} ${c.criterion}`).join('\n')}>{parseCriteria(r.packet!.criteria).length ? `${parseCriteria(r.packet!.criteria).filter((c) => c.met).length}/${parseCriteria(r.packet!.criteria).length}` : <span className="muted">·</span>}</td>}
               {domains.map((d) => { const x = level(r.code, d); return <td key={d} style={{ textAlign: 'center', background: x ? LEVEL_BG[x.level] : undefined }} title={x?.note ?? ''}>{x ? x.level : <span className="muted">·</span>}</td> })}
             </tr>
           ))}
         </tbody>
-        <tfoot><tr><td style={{ fontWeight: 600, borderTop: '2px solid var(--line)' }}>Class average</td><td style={{ borderTop: '2px solid var(--line)' }}></td>{domains.map((d) => <td key={d} style={{ textAlign: 'center', fontWeight: 600, borderTop: '2px solid var(--line)' }}>{avg(d)}</td>)}</tr></tfoot>
+        <tfoot><tr><td style={{ fontWeight: 600, borderTop: '2px solid var(--line)' }}>Class average</td><td style={{ borderTop: '2px solid var(--line)' }}></td>{anyCriteria && <td style={{ borderTop: '2px solid var(--line)' }}></td>}{domains.map((d) => <td key={d} style={{ textAlign: 'center', fontWeight: 600, borderTop: '2px solid var(--line)' }}>{avg(d)}</td>)}</tr></tfoot>
       </table>
     </div>
+  )
+}
+
+
+function RubricCard({ a, rubric, allDomains, onSaved }: { a: Assignment; rubric: Rubric; allDomains: string[]; onSaved: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [r, setR] = useState<Rubric>(rubric)
+  const [criteria, setCriteria] = useState(rubric.criteria.join('\n'))
+  const [focus, setFocus] = useState(rubric.focus.join(', '))
+  const [saved, setSaved] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const chosen = r.domains ?? allDomains
+  const summary = [
+    rubric.criteria.length ? `${rubric.criteria.length} criteria` : rubric.propose ? 'criteria from the worksheet' : 'no criteria',
+    `${(rubric.domains ?? allDomains).length} of ${allDomains.length} domains`,
+    rubric.focus.length ? `focus: ${rubric.focus.join(', ')}` : null,
+    { warm: 'warm', plain: 'plain', playful: 'playful' }[rubric.tone] + ', ' + { short: 'short', standard: 'standard', full: 'full' }[rubric.length] + ' notes',
+    rubric.scoring === 'none' ? 'no score' : rubric.scoring === 'outOf' ? `score out of ${rubric.scoreOf}` : 'score 1 to 4',
+  ].filter(Boolean).join(' · ')
+  async function save() {
+    try {
+      setErr(null)
+      const body = { ...r, criteria: criteria.split('\n').map((x) => x.trim()).filter(Boolean), focus: focus.split(',').map((x) => x.trim()).filter(Boolean), domains: r.domains && r.domains.length === allDomains.length ? null : r.domains }
+      await fetch(`/api/assignments/${a.code}/rubric`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(async (x) => { if (!x.ok) throw new Error((await x.json()).error ?? x.statusText) })
+      setSaved(true)
+      onSaved()
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+  const toggleDomain = (d: string) => setR({ ...r, domains: chosen.includes(d) ? chosen.filter((x) => x !== d) : allDomains.filter((x) => x === d || chosen.includes(x)) })
+  const ta = { width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' as const }
+  return (
+    <section className="card" style={{ gap: 12, padding: '14px 18px' }} data-testid="rubric">
+      <div className="between">
+        <div><span className="over">Rubric</span> <span className="muted small" style={{ marginLeft: 10 }}>{summary}</span></div>
+        <button className="btn" onClick={() => setOpen((v) => !v)}>{open ? 'Close' : 'Edit rubric'}</button>
+      </div>
+      {!open && <div className="muted small">What the analysis checks and how it writes, for this assignment. Used by Analyse with Claude and by Copy prompt.</div>}
+      {open && (
+        <form className="col" style={{ gap: 14 }} onSubmit={(e) => { e.preventDefault(); void save() }}>
+          <div className="grid2" style={{ gap: 16 }}>
+            <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Success criteria · one a line, checked for every student</span>
+              <textarea value={criteria} onChange={(e) => { setCriteria(e.target.value); setSaved(false) }} rows={5} placeholder={'all four sections filled\none now-versus-future contrast\na wish for future me\na sign-off'} style={ta} />
+              <label className="row small"><input type="checkbox" checked={r.propose} onChange={(e) => setR({ ...r, propose: e.target.checked })} /> If this is empty, work out criteria from the worksheet itself</label>
+            </label>
+            <div className="col" style={{ gap: 8 }}>
+              <span className="over quiet" style={{ fontSize: 10 }}>Domains rated for this assignment · and what a 4 looks like here</span>
+              {allDomains.map((d) => (
+                <div key={d} className="row" style={{ gap: 8 }}>
+                  <label className="row small" style={{ width: 200 }}><input type="checkbox" checked={chosen.includes(d)} onChange={() => toggleDomain(d)} /> {d.split(':')[0].trim()}</label>
+                  <input type="text" value={r.domainNotes[d] ?? ''} disabled={!chosen.includes(d)} onChange={(e) => setR({ ...r, domainNotes: { ...r.domainNotes, [d]: e.target.value } })} placeholder="optional: what earns a 4" style={{ flex: 1, fontSize: 13 }} />
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="row" style={{ gap: 14 }}>
+            <label className="col" style={{ gap: 4, flex: 1, minWidth: 240 }}><span className="over quiet" style={{ fontSize: 10 }}>Focus · what you have been teaching, comma separated</span><input type="text" value={focus} onChange={(e) => { setFocus(e.target.value); setSaved(false) }} placeholder="past tense, question marks, because sentences" /></label>
+            <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Tone</span><select value={r.tone} onChange={(e) => setR({ ...r, tone: e.target.value as Rubric['tone'] })}><option value="warm">Warm</option><option value="plain">Plain</option><option value="playful">Playful</option></select></label>
+            <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Student note</span><select value={r.length} onChange={(e) => setR({ ...r, length: e.target.value as Rubric['length'] })}><option value="short">Short · grades 1 to 2</option><option value="standard">Standard</option><option value="full">Full · grades 4 to 5</option></select></label>
+            <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Fix-it rows</span><input type="number" min={0} max={10} value={r.fixitMax} onChange={(e) => setR({ ...r, fixitMax: Number(e.target.value) })} style={{ width: 70 }} /></label>
+            <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Score</span><select value={r.scoring} onChange={(e) => setR({ ...r, scoring: e.target.value as Rubric['scoring'] })}><option value="holistic4">1 to 4, whole task</option><option value="outOf">Out of…</option><option value="none">No score</option></select></label>
+            {r.scoring === 'outOf' && <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Out of</span><input type="number" min={1} max={100} value={r.scoreOf ?? ''} onChange={(e) => setR({ ...r, scoreOf: Number(e.target.value) || null })} style={{ width: 70 }} /></label>}
+          </div>
+          <div className="muted small">The note to the student never mentions the score, whatever is chosen here.</div>
+          <div className="row"><button type="submit" className="btn primary">Save rubric</button>{saved && <span className="muted small">Saved</span>}{err && <span className="err">{err}</span>}</div>
+        </form>
+      )}
+    </section>
   )
 }

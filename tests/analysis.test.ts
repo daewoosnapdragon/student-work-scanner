@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { classPrompt, splitClassAnswer, splitStudentSection } from '../server/analysis.js'
+import { classPrompt, rubricText, splitClassAnswer, splitStudentSection } from '../server/analysis.js'
+import { DEFAULT_RUBRIC } from '../shared/types.js'
 import { parseCorrectionLines } from '../shared/types.js'
 
 const codes = ['4S18', '4S15', '4M27']
@@ -73,7 +74,7 @@ describe('splitting one student section into teacher and feedback parts', () => 
   })
   it('is all for the teacher when nothing marks a feedback part', () => {
     const r = splitStudentSection('Just notes.')
-    expect(r).toEqual({ teacher: 'Just notes.', feedback: null, domains: [], corrections: [] })
+    expect(r).toEqual({ teacher: 'Just notes.', feedback: null, domains: [], corrections: [], criteria: [] })
   })
   it('keeps the prompt asking for both parts', () => {
     const p = classPrompt({ code: 'W04', title: 'T', klass: 'K', grade: 4, tags: '' }, [{ code: '4S18', name: 'Lee Yoona', pages: 3 }])
@@ -142,5 +143,46 @@ Jayana, great middle part!
   })
   it('is asked for in the prompt', () => {
     expect(classPrompt({ code: 'W04', title: 'T', klass: 'K', grade: 4, tags: '' }, [{ code: '4S18', name: 'Lee Yoona', pages: 3 }])).toContain('### Fix-it')
+  })
+})
+
+describe('the rubric', () => {
+  it('reads criteria lines as met or not yet, with evidence', () => {
+    const r = splitStudentSection(`### Teacher
+Fine.
+### Criteria
+- all four sections filled: met — every box has writing
+- a wish for future me: not yet — the letter stops after the questions
+- [x] a sign-off: yes
+### Fix-it
+- ur → our`)
+    expect(r.criteria).toEqual([
+      { criterion: 'all four sections filled', met: true, evidence: 'every box has writing' },
+      { criterion: 'a wish for future me', met: false, evidence: 'the letter stops after the questions' },
+      { criterion: 'a sign-off', met: true, evidence: null },
+    ])
+    expect(r.corrections).toHaveLength(1)
+  })
+  it('turns the rubric into instructions: criteria, chosen domains, focus, tone, scoring, and never a score in the student note', () => {
+    const t = rubricText({ ...DEFAULT_RUBRIC, criteria: ['four sections filled', 'a sign-off'], domains: ['Ideas and content'], domainNotes: { 'Ideas and content': 'a real now-versus-future contrast' }, focus: ['past tense'], tone: 'plain', length: 'short', fixitMax: 3, scoring: 'outOf', scoreOf: 10 }, 4, ['Ideas and content', 'Organization'])
+    expect(t).toContain('(1) four sections filled (2) a sign-off')
+    expect(t).toContain('Ideas and content (a 4 here: a real now-versus-future contrast)')
+    expect(t).not.toContain('Organization')
+    expect(t).toContain('concentrate on: past tense')
+    expect(t).toContain('plain and direct, 2 to 3 short sentences')
+    expect(t).toContain('never mentions a score')
+    expect(t).toContain('at most 3 rows')
+    expect(t).toContain('out of 10')
+  })
+  it('with no criteria and propose on, asks Claude to work them out; with scoring off, says so', () => {
+    const t = rubricText({ ...DEFAULT_RUBRIC, scoring: 'none' }, 2, ['Ideas and content'])
+    expect(t).toContain('work out 3 to 5')
+    expect(t).toContain('Do not score')
+  })
+  it('the prompt carries the rubric and the Criteria section', () => {
+    const p = classPrompt({ code: 'W04', title: 'T', klass: 'K', grade: 4, tags: '' }, [{ code: '4S18', name: 'Lee Yoona', pages: 3 }], ['Ideas and content'], { ...DEFAULT_RUBRIC, criteria: ['a sign-off'] })
+    expect(p).toContain('### Criteria')
+    expect(p).toContain('- a sign-off: met — (the evidence)')
+    expect(p).toContain('Never a score, mark or level')
   })
 })

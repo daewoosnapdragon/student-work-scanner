@@ -11,12 +11,13 @@ import { z } from 'zod'
 import sharp from 'sharp'
 import {
   getAssignment, getMeta, getPacket, getStudent, packetPages, packetsForAssignment, setAssignmentAnalysis, setMeta,
-  setPacketFeedback, setPacketScore, replaceSkills, markAnalysed, replaceDomains, setPacketCorrections,
+  setPacketFeedback, setPacketScore, replaceSkills, markAnalysed, replaceDomains, setPacketCorrections, setPacketCriteria,
 } from './db.js'
 import { abs } from './pipeline.js'
 import { broadcast } from './events.js'
 import { sideLabel } from './codes.js'
-import type { Assignment, Packet, Student } from '../shared/types.js'
+import { parseRubric, type Assignment, type Packet, type Rubric, type Student } from '../shared/types.js'
+import { rubricText } from './analysis.js'
 
 export const DEFAULT_MODEL = 'claude-opus-5-5'
 export const DEFAULT_DOMAINS = ['Ideas and content', 'Organization', 'Language: grammar and vocabulary', 'Spelling and punctuation', 'Task completion']
@@ -88,18 +89,27 @@ const PacketResult = z.object({
     why: z.string().describe('The rule in one short sentence a child understands: "after did, the verb stays plain".'),
   })).describe('The fix-it table on the student\'s slip: the 3 to 6 mistakes most worth fixing, only ones actually on the page, the most important first. Up to 3 for grades 1 and 2. Spelling, grammar, punctuation, capitals, word choice. Empty if the work has nothing worth correcting.'),
 })
-export type PacketResultT = z.infer<typeof PacketResult> & { domains: Array<{ domain: string; level: number; note: string }> }
+export type PacketResultT = z.infer<typeof PacketResult> & { domains: Array<{ domain: string; level: number; note: string }>; criteria: Array<{ criterion: string; met: boolean; evidence: string }> }
 
-// The domains are the teacher's own list, so the schema is built per request.
-function packetSchema(domains: string[]) {
+// The domains and criteria are the teacher's own, so the schema is built per request.
+function packetSchema(domains: string[], rubric: Rubric) {
+  const criteria = rubric.criteria.length
+    ? z.array(z.object({ criterion: z.enum(rubric.criteria as [string, ...string[]]), met: z.boolean(), evidence: z.string().describe('What on the page shows it, or what is missing.') })).describe('Every criterion in the list, in order.')
+    : rubric.propose
+      ? z.array(z.object({ criterion: z.string().describe('A success criterion the worksheet itself asks for, in a few words.'), met: z.boolean(), evidence: z.string() })).describe('3 to 5 criteria worked out from what the worksheet asks for, the same ones for every student.')
+      : z.array(z.object({ criterion: z.string(), met: z.boolean(), evidence: z.string() })).max(0).describe('Empty: no criteria for this task.')
   return PacketResult.extend({
-    domains: z.array(z.object({
-      domain: z.enum(domains as [string, ...string[]]),
-      level: z.number().int().min(1).max(4).describe('4 strong, 3 secure, 2 developing, 1 beginning. Judge against what this grade can be expected to do.'),
-      note: z.string().describe('One short phrase saying why, from the page.'),
-    })).describe('One entry for every domain in the list, in order.'),
+    criteria,
+    domains: domains.length
+      ? z.array(z.object({
+          domain: z.enum(domains as [string, ...string[]]),
+          level: z.number().int().min(1).max(4).describe('4 strong, 3 secure, 2 developing, 1 beginning. Judge against what this grade can be expected to do.'),
+          note: z.string().describe('One short phrase saying why, from the page.'),
+        })).describe('One entry for every domain in the list, in order.')
+      : z.array(z.object({ domain: z.string(), level: z.number(), note: z.string() })).max(0).describe('Empty: no domains for this task.'),
   })
 }
+export type PacketResultFull = z.infer<ReturnType<typeof packetSchema>>
 
 const ClassResult = z.object({
   summary: z.string().describe('What the whole class shows: 2 to 4 short paragraphs. Shared strengths, the common gaps with how many students show each, and what to teach next, concretely.'),
@@ -111,16 +121,21 @@ async function pageImage(file: string): Promise<Anthropic.ImageBlockParam> {
   return { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: buf.toString('base64') } }
 }
 
-function system(a: Assignment): string {
+function system(a: Assignment, rubric: Rubric, domains: string[]): string {
   const ctx = getMeta('teacherContext')?.trim()
   return [
     'You read scanned worksheets from an elementary English class in Korea (students learning English) and write what each one shows, for the teacher and for the student.',
     'Be concrete and honest. Quote the handwriting rather than describing it vaguely. Never invent work that is not on the page. If a side is blank or unreadable, say so.',
-    'The teacher\'s note is professional and brief. The student\'s note is warm, specific and short, and addresses the child by first name; it names one real strength with their own words quoted, and one thing to try next time; it carries no score or grade.',
-    `Rate every one of these domains from 1 to 4 (4 strong, 3 secure, 2 developing, 1 beginning), against what this grade can be expected to do: ${domainList().join('; ')}.`,
+    'The teacher\'s note is professional and brief. The student\'s note is specific and addresses the child by first name; it names one real strength with their own words quoted, and one thing to try next time; it never carries a score, mark or level.',
     `This assignment: "${a.title}" (${a.code}), ${a.klass}${a.grade != null ? `, grade ${a.grade}` : ''}${a.tags ? `, on ${a.tags}` : ''}. ${a.sheets} sheet${a.sheets === 1 ? '' : 's'}${a.twoSided ? ', both sides' : ''}.${a.notes ? ` Notes: ${a.notes}` : ''}`,
+    rubricText(rubric, a.grade, domains),
     ctx ? `About the class and how the teacher works: ${ctx}` : '',
   ].filter(Boolean).join('\n\n')
+}
+/** The domains this assignment's rubric keeps, in Settings order. */
+export function domainsFor(rubric: Rubric): string[] {
+  const all = domainList()
+  return rubric.domains && rubric.domains.length ? all.filter((d) => rubric.domains!.includes(d)) : all
 }
 
 export async function analysePacket(student: string, assignment: string): Promise<PacketResultT> {
@@ -137,20 +152,23 @@ export async function analysePacket(student: string, assignment: string): Promis
     content.push(await pageImage(abs(p.filePath)))
   }
   content.push({ type: 'text', text: `These are ${first}'s pages (code ${s.code}${s.grade != null ? `, grade ${s.grade}` : ''}), in order. The English name in brackets, if any, is what the child goes by in class; use it in the feedback. Write the teacher's notes, the student's note, a score if the work can be scored, and the skills shown.` })
-  const domains = domainList()
+  const rubric = parseRubric(a.rubric)
+  const domains = domainsFor(rubric)
   const res = await client().messages.parse({
     model: getMeta('model') ?? DEFAULT_MODEL,
     max_tokens: 16000,
-    output_config: { effort: 'high', format: zodOutputFormat(packetSchema(domains)) },
-    system: system(a),
+    output_config: { effort: 'high', format: zodOutputFormat(packetSchema(domains, rubric)) },
+    system: system(a, rubric, domains),
     messages: [{ role: 'user', content }],
   })
   if (res.stop_reason === 'refusal') throw new Error(`Claude declined to read this packet${res.stop_details?.explanation ? `: ${res.stop_details.explanation}` : ''}`)
   const out = res.parsed_output
   if (!out) throw new Error('Claude answered in a shape that could not be read; try again')
-  setPacketScore(student, assignment, out.score, out.scoreOf, out.teacher)
+  const scored = rubric.scoring === 'none' ? { score: null, scoreOf: null } : rubric.scoring === 'outOf' && rubric.scoreOf ? { score: out.score, scoreOf: rubric.scoreOf } : { score: out.score, scoreOf: out.score == null ? null : 4 }
+  setPacketScore(student, assignment, scored.score, scored.scoreOf, out.teacher)
   setPacketFeedback(student, assignment, out.feedback)
-  setPacketCorrections(student, assignment, out.corrections.slice(0, (a.grade ?? s.grade ?? 3) <= 2 ? 3 : 6))
+  setPacketCorrections(student, assignment, out.corrections.slice(0, Math.min(rubric.fixitMax, (a.grade ?? s.grade ?? 3) <= 2 ? 3 : 6)))
+  setPacketCriteria(student, assignment, out.criteria.map((c) => ({ ...c, evidence: c.evidence || null })))
   replaceSkills(student, assignment, out.skills.map((k) => ({ ...k, at: pk.lastAt })))
   replaceDomains(student, assignment, out.domains, pk.lastAt)
   markAnalysed(student, assignment)
@@ -167,11 +185,12 @@ export async function analyseClass(assignment: string): Promise<z.infer<typeof C
     const s = getStudent(p.student)
     return `### ${s?.name ?? p.student} (${p.student})${p.score != null ? ` · ${p.score}/${p.scoreOf ?? '?'}` : ''}\n${p.note}`
   })
+  const rubric = parseRubric(a.rubric)
   const res = await client().messages.parse({
     model: getMeta('model') ?? DEFAULT_MODEL,
     max_tokens: 16000,
     output_config: { effort: 'medium', format: zodOutputFormat(ClassResult) },
-    system: system(a),
+    system: system(a, rubric, domainsFor(rubric)),
     messages: [{ role: 'user', content: `Here are the teacher's notes on each student's work, from reading the pages. Write what the whole class shows and what to teach next, and name one student worth noticing.\n\n${lines.join('\n\n')}` }],
   })
   if (res.stop_reason === 'refusal') throw new Error('Claude declined to summarise this class')
