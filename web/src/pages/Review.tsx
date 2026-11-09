@@ -29,7 +29,8 @@ export default function Review() {
   }, [item?.pageId, item?.student, item?.assignment])
 
   useEffect(() => {
-    if (!other.student || /^S\d+$/i.test(other.student)) return setMatches([])
+    if (!other.student || /^[A-Z0-9-]{3,12}$/i.test(other.student.trim()) && matches.some((m) => m.code === other.student.trim().toUpperCase())) return setMatches([])
+    if (!other.student) return setMatches([])
     const t = setTimeout(() => get<Student[]>(`/api/students/search?q=${encodeURIComponent(other.student)}`).then(setMatches).catch(() => setMatches([])), 150)
     return () => clearTimeout(t)
   }, [other.student])
@@ -114,6 +115,12 @@ export default function Review() {
         </div>
       </section>
 
+      {items.filter((i) => i.kind === 'page' && i.pageId && !data.pages[i.pageId]?.decoded).length > 3 && (
+        <div className="notice row" style={{ justifyContent: 'space-between' }}>
+          <span>{items.filter((i) => i.kind === 'page' && i.pageId && !data.pages[i.pageId]?.decoded).length} pages here have no code. If they are one assignment scanned in order, File a stack names them all at once: one student per packet, pre-filled from the roster.</span>
+          <Link className="btn primary" to="/review/stack">File a stack</Link>
+        </div>
+      )}
       {item && (
         <section className="grid2" style={{ gridTemplateColumns: 'minmax(0, 3fr) minmax(0, 2fr)', gap: 32 }}>
           <div className="col">
@@ -159,10 +166,10 @@ export default function Review() {
               <div className="col" style={{ gap: 8 }}>
                 {otherPick && (
                   <div className="row">
-                    <label className="col" style={{ gap: 4, flex: 1, position: 'relative' }}><span className="over quiet" style={{ fontSize: 10 }}>Student name or code</span>
+                    <label className="col" style={{ gap: 4, flex: 1 }}><span className="over quiet" style={{ fontSize: 10 }}>Student name or code</span>
                       <input type="text" value={other.student} onChange={(e) => setOther({ ...other, student: e.target.value })} placeholder="Minji or S07" />
                       {matches.length > 0 && (
-                        <div className="card" style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 2, padding: 6, gap: 2 }}>
+                        <div className="card" style={{ padding: 6, gap: 2 }}>
                           {matches.map((m) => <button key={m.code} className="tab" style={{ textAlign: 'left', padding: '4px 6px' }} onClick={() => { setOther({ ...other, student: m.code }); setMatches([]) }}>{m.name} · {m.code} · {m.klass}</button>)}
                         </div>
                       )}

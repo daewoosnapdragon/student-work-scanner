@@ -26,6 +26,7 @@ export default function Stack() {
   const [detail, setDetail] = useState<AssignmentDetail | null>(null)
   const [excluded, setExcluded] = useState<Set<number>>(new Set())
   const [sizes, setSizes] = useState<number[]>([])
+  const [limit, setLimit] = useState<number | ''>('')   // students in this pile; pages past them stay in review for the next pass
   const [picks, setPicks] = useState<Record<number, string>>({})
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
@@ -41,7 +42,9 @@ export default function Stack() {
   }, [assignment])
 
   const expected = detail?.expected ?? 1
-  const packets = chunk(included, sizes, expected)
+  const allPackets = chunk(included, sizes, expected)
+  const packets = limit === '' ? allPackets : allPackets.slice(0, Math.max(0, limit))
+  const leftOver = included.length - packets.reduce((t, pk) => t + pk.length, 0)
   // students of the class who have not turned this in yet, in name order: the usual order of a collected pile
   const roster = useMemo(() => (detail ? detail.students.filter((s) => !s.packet).sort((a, b) => a.name.localeCompare(b.name)) : []), [detail])
   const everyone = detail?.students ?? []
@@ -106,6 +109,12 @@ export default function Stack() {
         </label>
         <button className="btn" onClick={() => setNewA(newA ? null : { code: '', title: '', klass: classes[0] ?? '', grade: '', sheets: 1, twoSided: true })}>{newA ? 'Cancel' : 'New assignment'}</button>
         {detail && <span className="muted small">{expected} side{expected === 1 ? '' : 's'} per student · {detail.assignment.sheets} sheet{detail.assignment.sheets === 1 ? '' : 's'}{detail.assignment.twoSided ? ', both sides' : ''} · {roster.length} students still to turn in</span>}
+        {detail && (
+          <label className="row" title="If the pile holds more than one assignment, file the first so many students now; the pages after them stay in review for the next pass">
+            <span className="over quiet" style={{ fontSize: 10 }}>Students in this pile</span>
+            <input type="number" min={1} max={allPackets.length} value={limit} placeholder={String(allPackets.length)} onChange={(e) => setLimit(e.target.value === '' ? '' : Number(e.target.value))} style={{ width: 70 }} />
+          </label>
+        )}
         <span className="muted small" style={{ marginLeft: 'auto' }}>{included.length} of {pages.length} pages in the stack</span>
       </section>
 
@@ -160,6 +169,7 @@ export default function Stack() {
               </div>
             </div>
           ))}
+          {leftOver > 0 && <div className="muted small">{leftOver} page{leftOver === 1 ? '' : 's'} after these packets stay in review for the next pass.</div>}
           {excluded.size > 0 && <div className="muted small">{excluded.size} page{excluded.size === 1 ? '' : 's'} taken out of the stack; they stay in review. <button className="btn" onClick={() => setExcluded(new Set())}>Put them back</button></div>}
           {dupes.length > 0 && <p className="err" style={{ margin: 0 }}>{dupes.join(', ')} chosen more than once.</p>}
           {unnamed > 0 && <p className="muted small" style={{ margin: 0 }}>{unnamed} packet{unnamed === 1 ? '' : 's'} still without a student.</p>}
