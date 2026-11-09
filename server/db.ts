@@ -128,6 +128,14 @@ export function upsertAssignment(a: Omit<Assignment, 'createdAt' | 'sides'> & { 
     )
     .run(a.code, a.title, a.klass, a.grade ?? null, a.assignedOn ?? null, a.sheets, a.twoSided, a.tags ?? '', a.notes ?? null, a.sides ?? null)
 }
+/** Remove an assignment that has no work filed under it. Returns false when pages or packets exist. */
+export function deleteAssignment(code: string): boolean {
+  const d = getDb()
+  const used = d.prepare("SELECT 1 FROM pages WHERE assignment = ? AND status IN ('filed','review') LIMIT 1").get(code) || d.prepare('SELECT 1 FROM packets WHERE assignment = ? LIMIT 1').get(code)
+  if (used) return false
+  d.prepare('DELETE FROM assignments WHERE code = ?').run(code)
+  return true
+}
 // Every side the assignment expects. `sides` caps it for a double-sided
 // packet with an odd page count, whose last back is blank and never scanned.
 export function sidesFor(a: Assignment): Array<{ page: number; side: Side }> {

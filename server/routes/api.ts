@@ -5,7 +5,7 @@ import QRCode from 'qrcode'
 import {
   allPackets, expectedFor, findStudentsByName, getAssignment, getPacket, getStudent, listAssignments, listStudents,
   packetPages, packetsForAssignment, packetsForStudent, pagesForStudent, pagesSince, recentPages, reviewPages,
-  setPacketScore, upsertAssignment, upsertStudent, closePacketIncomplete, getPage, getMeta, sidesFor,
+  setPacketScore, upsertAssignment, upsertStudent, closePacketIncomplete, getPage, getMeta, sidesFor, deleteAssignment,
 } from '../db.js'
 import { subscribe } from '../events.js'
 import { guessesFor } from '../guesses.js'
@@ -129,6 +129,13 @@ api.post('/assignments', (req, res) => {
     sides: b.sides == null ? null : Number(b.sides),
   })
   res.json(getAssignment(String(b.code).toUpperCase()))
+})
+
+api.delete('/assignments/:code', (req, res) => {
+  const code = req.params.code.toUpperCase()
+  if (!getAssignment(code)) return res.status(404).json({ error: 'no such assignment' })
+  if (!deleteAssignment(code)) return res.status(409).json({ error: `${code} has scanned work filed under it, so it stays. Pages can be skipped or refiled from Review first.` })
+  res.json({ deleted: code })
 })
 
 api.get('/assignments/:code', (req, res) => {

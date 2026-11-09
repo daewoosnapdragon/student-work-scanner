@@ -15,6 +15,13 @@ export async function post<T>(url: string, body: unknown): Promise<T> {
   return data
 }
 
+export async function del<T>(url: string): Promise<T> {
+  const r = await fetch(url, { method: 'DELETE' })
+  const data = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(data.error ?? r.statusText)
+  return data
+}
+
 // Fetches once and again whenever `bump` changes or a live event arrives.
 export function useFetch<T>(url: string | null, bump = 0) {
   const [data, setData] = useState<T | null>(null)

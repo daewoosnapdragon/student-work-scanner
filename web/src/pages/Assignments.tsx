@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { post, useFetch, fmtDate, type Assignment } from '../api'
+import { del, post, useFetch, fmtDate, type Assignment } from '../api'
 
 interface Row extends Assignment { turnedIn: number; complete: number; roster: number }
 
@@ -11,6 +11,18 @@ export default function Assignments() {
   const [form, setForm] = useState({ code: '', title: '', klass: '', grade: '', assignedOn: new Date().toISOString().slice(0, 10), sheets: 1, twoSided: true, tags: '' })
   const [err, setErr] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
+
+  async function remove(a: Row) {
+    if (a.turnedIn > 0) return setErr(`${a.code} has work from ${a.turnedIn} student${a.turnedIn === 1 ? '' : 's'} filed under it, so it stays.`)
+    if (!window.confirm(`Delete ${a.code} · ${a.title}? Nothing has been scanned for it. Labels already printed with this code would land in review.`)) return
+    try {
+      setErr(null)
+      await del(`/api/assignments/${a.code}`)
+      setBump((b) => b + 1)
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
 
   async function save() {
     try {
@@ -31,11 +43,12 @@ export default function Assignments() {
         <h1 className="serif title">Assignments</h1>
         <p className="lede">Each assignment has a code. Print its labels, stick one on each side, and the scanner files the pages on its own.</p>
         {error && <p className="err">{error}</p>}
+        {err && !showForm && <p className="err">{err}</p>}
       </section>
 
       <section style={{ overflowX: 'auto' }}>
         <table>
-          <thead><tr><th style={{ width: 70 }}>Code</th><th>Title</th><th>Class</th><th style={{ width: 100 }}>Assigned</th><th style={{ width: 120 }}>Sides</th><th style={{ width: 120 }}>Turned in</th><th style={{ width: 100 }}>Complete</th><th style={{ width: 150 }}></th></tr></thead>
+          <thead><tr><th style={{ width: 70 }}>Code</th><th>Title</th><th>Class</th><th style={{ width: 100 }}>Assigned</th><th style={{ width: 120 }}>Sides</th><th style={{ width: 120 }}>Turned in</th><th style={{ width: 100 }}>Complete</th><th style={{ width: 210 }}></th></tr></thead>
           <tbody>
             {data?.map((a) => (
               <tr key={a.code}>
@@ -46,7 +59,7 @@ export default function Assignments() {
                 <td>{a.sheets} sheet{a.sheets === 1 ? '' : 's'}{a.twoSided ? ', both sides' : ''}</td>
                 <td>{a.turnedIn} of {a.roster}</td>
                 <td>{a.complete}</td>
-                <td className="row"><Link to={`/assignments/${a.code}`} className="btn">Open</Link><a className="btn" href={`/print/labels/${a.code}`} target="_blank" rel="noreferrer">Labels</a></td>
+                <td className="row"><Link to={`/assignments/${a.code}`} className="btn">Open</Link><a className="btn" href={`/print/labels/${a.code}`} target="_blank" rel="noreferrer">Labels</a>{a.turnedIn === 0 && <button className="btn" onClick={() => void remove(a)} title="Delete this assignment. Only possible while nothing has been scanned for it.">Delete</button>}</td>
               </tr>
             ))}
             {data && data.length === 0 && <tr><td colSpan={8} className="muted">No assignments yet. Add the first one below.</td></tr>}
