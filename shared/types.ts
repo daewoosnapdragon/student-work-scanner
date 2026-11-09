@@ -32,6 +32,8 @@ export interface Assignment {
   twoSided: number // 1 if both sides are expected
   tags: string // comma separated
   notes: string | null
+  /** Total sides actually printed, when fewer than sheets × 2 (a double-sided packet with an odd page count). */
+  sides: number | null
   createdAt: string
 }
 

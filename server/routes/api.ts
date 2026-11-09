@@ -5,13 +5,13 @@ import QRCode from 'qrcode'
 import {
   allPackets, expectedFor, findStudentsByName, getAssignment, getPacket, getStudent, listAssignments, listStudents,
   packetPages, packetsForAssignment, packetsForStudent, pagesForStudent, pagesSince, recentPages, reviewPages,
-  setPacketScore, upsertAssignment, upsertStudent, closePacketIncomplete, getPage, getMeta,
+  setPacketScore, upsertAssignment, upsertStudent, closePacketIncomplete, getPage, getMeta, sidesFor,
 } from '../db.js'
 import { subscribe } from '../events.js'
 import { guessesFor } from '../guesses.js'
 import { abs, fileFromReview, skipAllInReview, skipFromReview, stalePackets } from '../pipeline.js'
 import { watcherStatus } from '../watcher.js'
-import { expectedSides, formatCode, sideLabel } from '../codes.js'
+import { formatCode, sideLabel } from '../codes.js'
 import type { Assignment, ReviewItem, Side, Student } from '../../shared/types.js'
 
 export const api = Router()
@@ -126,6 +126,7 @@ api.post('/assignments', (req, res) => {
   upsertAssignment({
     code: String(b.code).toUpperCase(), title: b.title, klass: b.klass, grade: b.grade ?? null, assignedOn: b.assignedOn ?? null,
     sheets: Number(b.sheets ?? 1), twoSided: b.twoSided ? 1 : 0, tags: b.tags ?? '', notes: b.notes ?? null,
+    sides: b.sides == null ? null : Number(b.sides),
   })
   res.json(getAssignment(String(b.code).toUpperCase()))
 })
@@ -167,7 +168,7 @@ api.get('/compare', (req, res) => {
     if (!s) return null
     return { student: s, packet: getPacket(code, assignment) ?? null, pages: packetPages(code, assignment) }
   }
-  res.json({ assignment: a, sides: expectedSides(a.sheets, !!a.twoSided), left: side(left), right: side(right) })
+  res.json({ assignment: a, sides: sidesFor(a), left: side(left), right: side(right) })
 })
 
 // ---------- Review ----------
@@ -180,7 +181,7 @@ api.get('/review', (_req, res) => {
   for (const pk of stalePackets()) {
     const a = getAssignment(pk.assignment)
     const have = new Set(packetPages(pk.student, pk.assignment).map((p) => `${p.page}${p.side}`))
-    const missing = a ? expectedSides(a.sheets, !!a.twoSided).filter((e) => !have.has(`${e.page}${e.side}`)) : []
+    const missing = a ? sidesFor(a).filter((e) => !have.has(`${e.page}${e.side}`)) : []
     items.push({
       kind: 'packet', pageId: null, student: pk.student, assignment: pk.assignment, scannedAt: pk.lastAt,
       problem: `Packet incomplete after ${Math.round((Date.now() - Date.parse(pk.lastAt)) / 3600000)} hours; ${missing.map((m) => sideLabel(m.page, m.side)).join(' and ')} never arrived`,
@@ -248,7 +249,7 @@ print.get('/labels/:assignment', async (req, res) => {
   const a = getAssignment(req.params.assignment.toUpperCase())
   if (!a) return res.status(404).send('no such assignment')
   const roster = listStudents(a.klass).filter((s) => s.active && (a.grade == null || s.grade == null || s.grade === a.grade))
-  const sides = expectedSides(a.sheets, !!a.twoSided)
+  const sides = sidesFor(a)
   const labels: string[] = []
   for (const s of roster) {
     for (const sd of sides) {

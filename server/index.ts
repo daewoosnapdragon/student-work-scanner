@@ -11,6 +11,18 @@ ensureDirs()
 openDb()
 
 const app = express()
+// Worksheet Studio (in the browser, on another origin) reads the roster and
+// registers assignments here when it prints a class set. Browsers treat
+// localhost as a secure origin, so an https page may call this http API.
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', req.headers.origin ?? '*')
+  res.setHeader('Vary', 'Origin')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  res.setHeader('Access-Control-Allow-Private-Network', 'true')
+  if (req.method === 'OPTIONS') return res.status(204).end()
+  next()
+})
 app.use(express.json())
 app.use('/api', api)
 app.use('/files', files)

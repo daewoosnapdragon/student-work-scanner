@@ -1,6 +1,6 @@
 import type { Guess, Page, Side } from '../shared/types.js'
-import { expectedSides, sideLabel } from './codes.js'
-import { getAssignment, getStudent, hasSide, neighbourPages } from './db.js'
+import { sideLabel } from './codes.js'
+import { getAssignment, getStudent, hasSide, neighbourPages, sidesFor } from './db.js'
 
 // A page whose code did not read still arrived somewhere in the stack. The
 // pages scanned just before and after it say whose packet it most likely
@@ -33,7 +33,7 @@ export function guessesFor(page: Page): Guess[] {
   for (const c of candidates.values()) {
     const a = getAssignment(c.assignment)
     const s = getStudent(c.student)
-    const expected = a ? expectedSides(a.sheets, !!a.twoSided) : [{ page: 1, side: 'a' as Side }]
+    const expected = a ? sidesFor(a) : [{ page: 1, side: 'a' as Side }]
     const missing = expected.filter((e) => !hasSide(c.student, c.assignment, e.page, e.side))
     let page: number | null = null
     let side: Side | null = null

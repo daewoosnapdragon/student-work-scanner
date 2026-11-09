@@ -83,6 +83,8 @@ function migrate(d: DatabaseSync) {
   // Columns added after the first release.
   const cols = (d.prepare('PRAGMA table_info(students)').all() as Array<{ name: string }>).map((c) => c.name)
   if (!cols.includes('externalId')) d.exec('ALTER TABLE students ADD COLUMN externalId TEXT')
+  const acols = (d.prepare('PRAGMA table_info(assignments)').all() as Array<{ name: string }>).map((c) => c.name)
+  if (!acols.includes('sides')) d.exec('ALTER TABLE assignments ADD COLUMN sides INTEGER')
 }
 
 // ---------- students ----------
@@ -117,17 +119,23 @@ export function listAssignments(): Assignment[] {
 export function getAssignment(code: string): Assignment | undefined {
   return getDb().prepare('SELECT * FROM assignments WHERE code = ?').get(code) as unknown as Assignment | undefined
 }
-export function upsertAssignment(a: Omit<Assignment, 'createdAt'>) {
+export function upsertAssignment(a: Omit<Assignment, 'createdAt' | 'sides'> & { sides?: number | null }) {
   getDb()
     .prepare(
-      `INSERT INTO assignments (code,title,klass,grade,assignedOn,sheets,twoSided,tags,notes) VALUES (?,?,?,?,?,?,?,?,?)
+      `INSERT INTO assignments (code,title,klass,grade,assignedOn,sheets,twoSided,tags,notes,sides) VALUES (?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(code) DO UPDATE SET title=excluded.title, klass=excluded.klass, grade=excluded.grade,
-       assignedOn=excluded.assignedOn, sheets=excluded.sheets, twoSided=excluded.twoSided, tags=excluded.tags, notes=excluded.notes`,
+       assignedOn=excluded.assignedOn, sheets=excluded.sheets, twoSided=excluded.twoSided, tags=excluded.tags, notes=excluded.notes, sides=excluded.sides`,
     )
-    .run(a.code, a.title, a.klass, a.grade ?? null, a.assignedOn ?? null, a.sheets, a.twoSided, a.tags ?? '', a.notes ?? null)
+    .run(a.code, a.title, a.klass, a.grade ?? null, a.assignedOn ?? null, a.sheets, a.twoSided, a.tags ?? '', a.notes ?? null, a.sides ?? null)
+}
+// Every side the assignment expects. `sides` caps it for a double-sided
+// packet with an odd page count, whose last back is blank and never scanned.
+export function sidesFor(a: Assignment): Array<{ page: number; side: Side }> {
+  const all = expectedSides(a.sheets, !!a.twoSided)
+  return a.sides && a.sides > 0 && a.sides < all.length ? all.slice(0, a.sides) : all
 }
 export function expectedFor(a: Assignment): number {
-  return expectedSides(a.sheets, !!a.twoSided).length
+  return sidesFor(a).length
 }
 
 // ---------- pages ----------

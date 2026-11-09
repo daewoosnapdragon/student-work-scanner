@@ -58,6 +58,10 @@ Review is keyboard first: J and K move, 1 to 3 pick a guess, Enter files, X skip
 
 Before the first run, empty the scan folder of old scans, or expect them all in review.
 
+## Printing from Worksheet Studio
+
+Worksheet Studio's Print… dialog has a Class set row. It reads the class list from this program (at `http://localhost:4710`, so the scanner must be running on the same computer, or have been once), prints one copy per student with the code already in the corner and the name on the name line, and registers the assignment here. Nothing to stick on.
+
 ## Labels
 
 Every assignment page has a Print labels button (`/print/labels/W23`): one QR label per student per side, four across, ready to stick on the top right corner. The same codes can be placed on the worksheet itself before printing; `/print/code/S07/W23/2/b.svg` gives one code as an SVG. The codes use the highest QR error correction, so a third of the code can be damaged and still read.
