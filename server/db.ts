@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import fs from 'node:fs'
 import path from 'node:path'
 import { DB_PATH } from './config.js'
-import type { Assignment, Packet, Page, Progress, Side, Student } from '../shared/types.js'
+import type { Anchor, Assignment, Packet, Page, Progress, Side, Student } from '../shared/types.js'
 import type { Annotation, AnnotationKind } from '../shared/annotations.js'
 import { expectedSides } from './codes.js'
 
@@ -111,6 +111,15 @@ function migrate(d: DatabaseSync) {
     createdAt TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS annotations_page ON annotations(pageId, createdAt);
+  CREATE TABLE IF NOT EXISTS anchors (
+    assignment TEXT NOT NULL,
+    student TEXT NOT NULL,
+    score REAL NOT NULL,
+    scoreOf REAL,
+    note TEXT,
+    at TEXT NOT NULL,
+    PRIMARY KEY (assignment, student)
+  );
   `)
   // Columns added after the first release.
   const cols = (d.prepare('PRAGMA table_info(students)').all() as Array<{ name: string }>).map((c) => c.name)
@@ -401,6 +410,23 @@ export function deleteAnnotation(id: number): boolean {
 export function withAnnotationCounts<T extends { id: number }>(pages: T[]): Array<T & { annotations: number }> {
   const counts = annotationCounts(pages.map((p) => p.id))
   return pages.map((p) => ({ ...p, annotations: counts.get(p.id) ?? 0 }))
+}
+
+// ---------- anchors: packets the teacher scored to show what each score looks like ----------
+export function anchorsForAssignment(assignment: string): Anchor[] {
+  return getDb().prepare('SELECT * FROM anchors WHERE assignment = ? ORDER BY score DESC, at').all(assignment) as unknown as Anchor[]
+}
+export function getAnchor(assignment: string, student: string): Anchor | undefined {
+  return getDb().prepare('SELECT * FROM anchors WHERE assignment = ? AND student = ?').get(assignment, student) as unknown as Anchor | undefined
+}
+export function setAnchor(a: { assignment: string; student: string; score: number; scoreOf: number | null; note: string | null }): Anchor {
+  getDb().prepare(`INSERT INTO anchors (assignment, student, score, scoreOf, note, at) VALUES (?,?,?,?,?,?)
+    ON CONFLICT(assignment, student) DO UPDATE SET score=excluded.score, scoreOf=excluded.scoreOf, note=excluded.note, at=excluded.at`)
+    .run(a.assignment, a.student, a.score, a.scoreOf, a.note, new Date().toISOString())
+  return getAnchor(a.assignment, a.student)!
+}
+export function deleteAnchor(assignment: string, student: string): boolean {
+  return getDb().prepare('DELETE FROM anchors WHERE assignment = ? AND student = ?').run(assignment, student).changes > 0
 }
 
 // ---------- meta ----------

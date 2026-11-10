@@ -13,9 +13,9 @@ import { guessesFor } from '../guesses.js'
 import { abs, fileFromReview, reorderPacket, skipAllInReview, skipFromReview, stalePackets, unfilePage } from '../pipeline.js'
 import { buildPdf } from '../pdf.js'
 import { classPrompt, splitClassAnswer, splitStudentSection } from '../analysis.js'
-import { enqueueAssignment, enqueueClass, enqueuePacket, getSettings, queueStatus, saveSettings, testKey, domainList, domainsFor, LEVELS } from '../claude.js'
+import { enqueueAssignment, enqueueClass, enqueuePacket, getSettings, queueStatus, saveSettings, testKey, domainList, domainsFor, LEVELS, anchorsFor } from '../claude.js'
 import { skillsForStudent, skillsForAssignment, domainsForAssignment, domainsForStudent, replaceDomains, replaceSkills, setPacketCorrections, setPacketCriteria, setPacketProgress, setAssignmentRubric } from '../db.js'
-import { annotationsForPage, annotationsForPages, deleteAnnotation, getAnnotation, insertAnnotation, updateAnnotation, withAnnotationCounts } from '../db.js'
+import { annotationsForPage, annotationsForPages, deleteAnnotation, getAnnotation, insertAnnotation, updateAnnotation, withAnnotationCounts, anchorsForAssignment, setAnchor, deleteAnchor } from '../db.js'
 import { annotationsText, clampBox, isKind } from '../../shared/annotations.js'
 import { canonicalSkill, skillVocabulary } from '../skills.js'
 import { historyText, latestLevels, studentHistory } from '../history.js'
@@ -254,7 +254,7 @@ api.get('/assignments/:code/prompt', (req, res) => {
     return { code: p.student, name, pages: pages.length, history: historyText(studentHistory(p.student, code), first) || undefined, marks: marks || undefined }
   }).sort((x, y) => x.name.localeCompare(y.name))
   const rubric = parseRubric(a.rubric)
-  res.type('text').send(classPrompt(a, students, domainsFor(rubric), rubric, skillVocabulary()))
+  res.type('text').send(classPrompt(a, students, domainsFor(rubric), rubric, skillVocabulary(), anchorsFor(code)))
 })
 
 // The whole class as one PDF, students in name order, each page under a header line.
@@ -335,7 +335,32 @@ api.get('/assignments/:code', (req, res) => {
   const average = scored.length ? scored.reduce((t, p) => t + (p.score ?? 0), 0) / scored.length : null
   const noticingRaw = getMeta(`noticing:${a.code}`)
   const rubric = parseRubric(a.rubric)
-  res.json({ assignment: a, expected: expectedFor(a), students, inReview, average, scoredCount: scored.length, noticing: noticingRaw ? JSON.parse(noticingRaw) : null, analysisOn: getSettings().hasKey, domains: domainsFor(rubric), allDomains: domainList(), rubric, ratings: domainsForAssignment(a.code) })
+  res.json({ assignment: a, expected: expectedFor(a), students, inReview, average, scoredCount: scored.length, noticing: noticingRaw ? JSON.parse(noticingRaw) : null, analysisOn: getSettings().hasKey, domains: domainsFor(rubric), allDomains: domainList(), rubric, ratings: domainsForAssignment(a.code), anchors: anchorsForAssignment(a.code) })
+})
+
+// An anchor: the teacher's own score for a packet, which every other packet is then scored against.
+api.put('/packets/:assignment/:student/anchor', (req, res) => {
+  const assignment = req.params.assignment.toUpperCase(), student = req.params.student.toUpperCase()
+  const a = getAssignment(assignment)
+  if (!a || !getPacket(student, assignment)) return res.status(404).json({ error: 'no such packet' })
+  const b = req.body ?? {}
+  const score = Number(b.score)
+  if (!Number.isFinite(score)) return res.status(400).json({ error: 'the anchor needs a score' })
+  const rubric = parseRubric(a.rubric)
+  const scoreOf = b.scoreOf != null && Number.isFinite(Number(b.scoreOf)) ? Number(b.scoreOf) : rubric.scoring === 'outOf' && rubric.scoreOf ? rubric.scoreOf : 4
+  const note = typeof b.note === 'string' && b.note.trim() ? b.note.trim().slice(0, 500) : null
+  const anchor = setAnchor({ assignment, student, score, scoreOf, note })
+  // The teacher's score is the packet's score.
+  const pk = getPacket(student, assignment)!
+  setPacketScore(student, assignment, score, scoreOf, pk.note)
+  broadcast('packet', getPacket(student, assignment))
+  res.json(anchor)
+})
+api.delete('/packets/:assignment/:student/anchor', (req, res) => {
+  const assignment = req.params.assignment.toUpperCase(), student = req.params.student.toUpperCase()
+  deleteAnchor(assignment, student)
+  broadcast('packet', getPacket(student, assignment) ?? null)
+  res.json({ ok: true })
 })
 
 api.post('/packets/:assignment/:student/score', (req, res) => {

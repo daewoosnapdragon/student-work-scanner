@@ -87,6 +87,17 @@ export interface Packet {
   progress: string | null
 }
 
+/** A packet the teacher has scored by hand to show what a score looks like on this assignment; Claude scores the rest against them. */
+export interface Anchor {
+  assignment: string
+  student: string
+  score: number
+  scoreOf: number | null
+  /** What makes it that score, in the teacher's words. */
+  note: string | null
+  at: string
+}
+
 export type SkillLevelName = 'secure' | 'developing' | 'not_yet'
 export const SKILL_LEVEL_LABEL: Record<SkillLevelName, string> = { secure: 'secure', developing: 'developing', not_yet: 'not yet' }
 /** One skill from the earlier work that this piece gives evidence on. */

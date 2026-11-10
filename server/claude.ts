@@ -13,13 +13,13 @@ import {
   setPacketFeedback, setPacketScore, replaceSkills, markAnalysed, replaceDomains, setPacketCorrections, setPacketCriteria, setPacketProgress,
 } from './db.js'
 import { historyText, latestLevels, studentHistory } from './history.js'
-import { annotationsForPage } from './db.js'
+import { annotationsForPage, anchorsForAssignment, domainsForAssignment } from './db.js'
 import { annotationsText, pageJpeg } from './marks.js'
 import { abs } from './pipeline.js'
 import { broadcast } from './events.js'
 import { sideLabel } from './codes.js'
 import { parseProgress, parseRubric, SKILL_LEVEL_LABEL, type Assignment, type Packet, type Rubric, type Student } from '../shared/types.js'
-import { rubricText } from './analysis.js'
+import { anchorsText, rubricText, type AnchorForPrompt } from './analysis.js'
 import { canonicalSkill, saveSkillVocabulary, skillVocabulary, skillVocabularyText } from './skills.js'
 import { skillListForPrompt, type SkillDef } from '../shared/skills.js'
 
@@ -141,12 +141,12 @@ const ClassResult = z.object({
 })
 
 // The page as Claude sees it: with the teacher's comment boxes drawn on when there are any.
-async function pageImage(file: string, marks: Parameters<typeof pageJpeg>[1] = []): Promise<Anthropic.ImageBlockParam> {
-  const { buffer } = await pageJpeg(file, marks, 1568, 80)
+async function pageImage(file: string, marks: Parameters<typeof pageJpeg>[1] = [], width = 1568): Promise<Anthropic.ImageBlockParam> {
+  const { buffer } = await pageJpeg(file, marks, width, 80)
   return { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: buffer.toString('base64') } }
 }
 
-function system(a: Assignment, rubric: Rubric, domains: string[], skills: SkillDef[] = skillVocabulary()): string {
+function system(a: Assignment, rubric: Rubric, domains: string[], skills: SkillDef[] = skillVocabulary(), anchors: AnchorForPrompt[] = []): string {
   const ctx = getMeta('teacherContext')?.trim()
   return [
     'You read scanned worksheets from an elementary English class in Korea (students learning English) and write what each one shows, for the teacher and for the student.',
@@ -154,6 +154,7 @@ function system(a: Assignment, rubric: Rubric, domains: string[], skills: SkillD
     'The teacher\'s note is professional and brief. The student\'s note is specific and addresses the child by first name; it names one real strength with their own words quoted, and one thing to try next time; it never carries a score, mark or level.',
     `This assignment: "${a.title}" (${a.code}), ${a.klass}${a.grade != null ? `, grade ${a.grade}` : ''}${a.tags ? `, on ${a.tags}` : ''}. ${a.sheets} sheet${a.sheets === 1 ? '' : 's'}${a.twoSided ? ', both sides' : ''}.${a.notes ? ` Notes: ${a.notes}` : ''}`,
     rubricText(rubric, a.grade, domains),
+    anchors.length ? anchorsText(anchors, rubric) + ' The anchor packets\' pages come first in the message, each under a line naming its score; the packet to assess comes after them.' : '',
     `Skills are named only from this list, so the same skill has the same name on every assignment and a child's progress can be followed (group: names):\n${skillListForPrompt(skills)}`,
     'Where the teacher has marked a page, the marks are listed after it and drawn on it as thin numbered boxes; they are the teacher\'s, not the child\'s work, and they are the ground truth. A "fix" mark names a mistake that goes in the fix-it table before anything you found yourself, in the teacher\'s terms. A "praise" mark names a strength the student\'s note quotes. A "note" is context to use, and a question in one is for you to answer in the teacher\'s note.',
     'When earlier work by the same child is given: read the new pages on their own first and judge them as they are; only then compare. The earlier work says where to look, not what to find. If a skill the child was weak on has clearly moved up, the note to the student opens with that, naming the exact thing they did, before anything else, and the teacher\'s note says what moved and what did not. If the last note asked the child to try something, say whether they did. Never claim progress the pages do not show.',
@@ -166,6 +167,19 @@ export function domainsFor(rubric: Rubric): string[] {
   return rubric.domains && rubric.domains.length ? all.filter((d) => rubric.domains!.includes(d)) : all
 }
 
+/** The assignment's anchors with names and the teacher's domain ratings, leaving out the packet being assessed. */
+export function anchorsFor(assignment: string, except?: string): AnchorForPrompt[] {
+  const ratings = domainsForAssignment(assignment)
+  return anchorsForAssignment(assignment).filter((an) => an.student !== except && packetPages(an.student, assignment).length > 0).map((an) => ({
+    student: an.student,
+    name: getStudent(an.student)?.name ?? an.student,
+    score: an.score,
+    scoreOf: an.scoreOf,
+    note: an.note,
+    domains: ratings.filter((r) => r.student === an.student).map((r) => ({ domain: r.domain, level: r.level })),
+  }))
+}
+
 export async function analysePacket(student: string, assignment: string): Promise<PacketResultT> {
   const a = getAssignment(assignment)
   const s = getStudent(student)
@@ -175,6 +189,18 @@ export async function analysePacket(student: string, assignment: string): Promis
   if (!pages.length) throw new Error('no pages filed')
   const first = s.name.replace(/\s*\(([^)]*)\)\s*$/, (_m, nick) => ` (${nick})`)
   const content: Anthropic.ContentBlockParam[] = []
+  // The anchors first, the same for every packet of the assignment, so the API caches them across the run.
+  const anchors = anchorsFor(assignment, student)
+  for (const an of anchors) {
+    content.push({ type: 'text', text: `Anchor: ${an.name}'s packet, scored ${an.score} of ${an.scoreOf ?? 4} by the teacher${an.note ? ` (${an.note})` : ''}:` })
+    for (const p of packetPages(an.student, assignment)) {
+      content.push({ type: 'text', text: `${sideLabel(p.page ?? 1, p.side ?? 'a')}:` })
+      content.push(await pageImage(abs(p.filePath), [], 1200))
+    }
+  }
+  if (anchors.length) {
+    content.push({ type: 'text', text: 'End of the anchors. The packet to assess follows.', cache_control: { type: 'ephemeral' } })
+  }
   for (const p of pages) {
     const side = sideLabel(p.page ?? 1, p.side ?? 'a')
     const marks = annotationsForPage(p.id)
@@ -194,7 +220,8 @@ export async function analysePacket(student: string, assignment: string): Promis
     model: getMeta('model') ?? DEFAULT_MODEL,
     max_tokens: 16000,
     output_config: { effort: 'high', format: zodOutputFormat(packetSchema(domains, rubric, skills)) },
-    system: system(a, rubric, domains, skills),
+    // The system text is the same for every packet of the assignment: cached too.
+    system: [{ type: 'text', text: system(a, rubric, domains, skills, anchors), cache_control: { type: 'ephemeral' } }],
     messages: [{ role: 'user', content }],
   })
   if (res.stop_reason === 'refusal') throw new Error(`Claude declined to read this packet${res.stop_details?.explanation ? `: ${res.stop_details.explanation}` : ''}`)

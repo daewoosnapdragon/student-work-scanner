@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { post, useFetch, fmtDate, fileUrl, sideLabel, type Assignment, type Packet, type Page, type Student } from '../api'
-import { parseCorrectionLines, parseCorrections, parseCriteria, type Rubric } from '../../../shared/types'
+import { parseCorrectionLines, parseCorrections, parseCriteria, type Anchor, type Rubric } from '../../../shared/types'
+import { del, put } from '../api'
 import ProgressRow from '../components/ProgressRow'
 import { ScanLink, type ViewerPage } from '../components/Viewer'
 
 interface Row extends Student { packet: Packet | null; pages: Page[] }
 interface Rating { student: string; assignment: string; domain: string; level: number; note: string | null }
-interface Data { assignment: Assignment; expected: number; students: Row[]; inReview: number; average: number | null; scoredCount: number; noticing: { text: string; at: string } | null; analysisOn: boolean; domains: string[]; allDomains: string[]; rubric: Rubric; ratings: Rating[] }
+interface Data { assignment: Assignment; expected: number; students: Row[]; inReview: number; average: number | null; scoredCount: number; noticing: { text: string; at: string } | null; analysisOn: boolean; domains: string[]; allDomains: string[]; rubric: Rubric; ratings: Rating[]; anchors: Anchor[] }
 const LEVEL_NAME: Record<number, string> = { 4: 'Strong', 3: 'Secure', 2: 'Developing', 1: 'Beginning' }
 const LEVEL_BG: Record<number, string> = { 4: '#dff0e5', 3: '#eef5e9', 2: '#fff3d6', 1: '#f8dcd8' }
 const shortDomain = (d: string) => d.split(':')[0].trim()
@@ -98,6 +99,35 @@ export default function AssignmentPage() {
       )}
       {pasting && <PasteAnswer code={a.code} onDone={() => { setPasting(false); setBump((b) => b + 1) }} />}
 
+      {inRows.length > 0 && data.rubric.scoring !== 'none' && (
+        <section className="col" style={{ gap: 10 }}>
+          <div className="between">
+            <div className="over">Scoring anchors</div>
+            <div className="muted small">{data.anchors.length ? 'Claude scores every other packet by comparison with these.' : 'Score two or three packets yourself and mark them as anchors; Claude then scores the rest by comparison, in your terms.'}</div>
+          </div>
+          {data.anchors.length > 0 && (
+            <div className="row" style={{ gap: 12, alignItems: 'stretch' }}>
+              {data.anchors.map((an) => {
+                const row = inRows.find((r) => r.code === an.student)
+                const first = row?.pages[0]
+                return (
+                  <button key={an.student} type="button" className="card" style={{ padding: 10, width: 220, cursor: 'pointer', textAlign: 'left', font: 'inherit', color: 'inherit', borderColor: open === an.student ? 'var(--accent)' : undefined }} onClick={() => setOpen(open === an.student ? null : an.student)}>
+                    <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
+                      {first && <img src={fileUrl(first.thumbPath ?? first.filePath)} alt="" style={{ width: 56, height: 72, objectFit: 'cover', objectPosition: 'top', border: '1px solid var(--line)', background: '#fff' }} />}
+                      <div className="col" style={{ gap: 2, minWidth: 0 }}>
+                        <div className="num" style={{ fontSize: 24, marginTop: 0 }}>{an.score}<small> of {an.scoreOf ?? 4}</small></div>
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>{row?.name ?? an.student}</div>
+                        {an.note && <div className="muted small" style={{ lineHeight: 1.35 }}>{an.note}</div>}
+                      </div>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
       <section className="col">
         <div className="between">
           <div className="over">Who is in</div>
@@ -106,7 +136,7 @@ export default function AssignmentPage() {
         <div className="row">
           {sorted.map((s) => (
             <button key={s.code} className={`tile ${!s.packet!.complete || s.packet!.closedIncomplete ? 'part' : ''}`} style={open === s.code ? { borderColor: 'var(--accent)', boxShadow: 'inset 0 0 0 1px var(--accent)' } : undefined} onClick={() => setOpen(open === s.code ? null : s.code)}>
-              {s.name}{s.packet!.score != null ? ` · ${s.packet!.score}` : s.packet!.sides < s.packet!.expected ? ` · ${s.packet!.sides}/${s.packet!.expected}` : ''}
+              {s.name}{s.packet!.score != null ? ` · ${s.packet!.score}` : s.packet!.sides < s.packet!.expected ? ` · ${s.packet!.sides}/${s.packet!.expected}` : ''}{data.anchors.some((an) => an.student === s.code) && <span title="A scoring anchor" style={{ marginLeft: 6, color: 'var(--accent)', fontWeight: 700 }}>⚓</span>}
             </button>
           ))}
           {out.map((s) => <Link key={s.code} to={`/students/${s.code}`} className="tile out">{s.name}</Link>)}
@@ -114,7 +144,7 @@ export default function AssignmentPage() {
       </section>
 
       {selected && selected.packet && (
-        <PacketPanel key={`${selected.code}:${selected.packet.analysedAt ?? ''}:${data.ratings.filter((r) => r.student === selected.code).map((r) => r.level).join('')}`} s={selected} a={a} onSaved={() => setBump((b) => b + 1)} analysisOn={data.analysisOn} busyJob={active.some((j) => j.student === selected.code)} domains={data.domains} ratings={data.ratings.filter((r) => r.student === selected.code)} />
+        <PacketPanel key={`${selected.code}:${selected.packet.analysedAt ?? ''}:${data.ratings.filter((r) => r.student === selected.code).map((r) => r.level).join('')}`} s={selected} a={a} onSaved={() => setBump((b) => b + 1)} analysisOn={data.analysisOn} busyJob={active.some((j) => j.student === selected.code)} domains={data.domains} ratings={data.ratings.filter((r) => r.student === selected.code)} anchor={data.anchors.find((an) => an.student === selected.code) ?? null} rubric={data.rubric} />
       )}
 
       <section className="grid2 sep">
@@ -143,8 +173,9 @@ export default function AssignmentPage() {
   )
 }
 
-function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings }: { s: Row; a: Assignment; onSaved: () => void; analysisOn: boolean; busyJob: boolean; domains: string[]; ratings: Rating[] }) {
+function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings, anchor, rubric }: { s: Row; a: Assignment; onSaved: () => void; analysisOn: boolean; busyJob: boolean; domains: string[]; ratings: Rating[]; anchor: Anchor | null; rubric: Rubric }) {
   const p = s.packet!
+  const [anchoring, setAnchoring] = useState(false)
   const [levels, setLevels] = useState<Record<string, number>>(Object.fromEntries(ratings.map((r) => [r.domain, r.level])))
   const [editLevels, setEditLevels] = useState(false)
   async function saveDomains() {
@@ -226,6 +257,7 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings }: {
         <div><Link to={`/students/${s.code}`} className="serif" style={{ fontSize: 22, fontWeight: 700, color: 'var(--ink)' }}>{s.name}</Link> <span className="muted small" style={{ marginLeft: 8 }}>{s.code} · {p.sides} of {p.expected} sides{p.closedIncomplete ? ', filed incomplete' : ''} · last page {fmtDate(p.lastAt)}</span></div>
         <div className="row">
           {analysisOn && <button className="btn primary" disabled={busyJob} onClick={() => void analyseOne()} title={p.analysedAt ? `Analysed ${fmtDate(p.analysedAt)}; read it again` : 'Read these pages with Claude'}>{busyJob ? 'Analysing…' : p.analysedAt ? 'Analyse again' : 'Analyse'}</button>}
+          {rubric.scoring !== 'none' && <button className={`btn ${anchor ? 'primary' : ''}`} onClick={() => setAnchoring((v) => !v)} title={anchor ? 'This packet is a scoring anchor; change or remove it' : 'Score this packet yourself and make it an example of that score for Claude'}>{anchor ? `Anchor · ${anchor.score}` : 'Make an anchor'}</button>}
           <a className="btn" href={`/api/packets/${a.code}/${s.code}/pdf?download=1`} title="This student's pages as one PDF">PDF</a>
           {p.feedback && <a className="btn" href={`/print/feedback/${a.code}/${s.code}`} target="_blank" rel="noreferrer" title="The note to this student, as a slip to print or save as PDF">Feedback slip</a>}
           <Link className="btn" to={`/compare?assignment=${a.code}&left=${s.code}`}>Compare</Link>
@@ -247,6 +279,7 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings }: {
         ))}
       </div>
       <div className="muted small">Pages out of order? The arrows move a page; sides are renumbered by position. × sends a page back to Review.</div>
+      {anchoring && <AnchorForm a={a} s={s} anchor={anchor} rubric={rubric} onDone={() => { setAnchoring(false); onSaved() }} />}
       {parseCriteria(p.criteria).length > 0 && (
         <div className="row" style={{ gap: 6 }}>
           <span className="over quiet" style={{ fontSize: 10, marginRight: 4 }}>Criteria</span>
@@ -299,6 +332,46 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings }: {
         </div>
       </form>
     </section>
+  )
+}
+
+// The teacher's own score for this packet, kept as an example of that score. Every other packet is then scored against the anchors.
+function AnchorForm({ a, s, anchor, rubric, onDone }: { a: Assignment; s: Row; anchor: Anchor | null; rubric: Rubric; onDone: () => void }) {
+  const of = rubric.scoring === 'outOf' && rubric.scoreOf ? rubric.scoreOf : 4
+  const [score, setScore] = useState(anchor ? String(anchor.score) : s.packet!.score != null ? String(s.packet!.score) : '')
+  const [note, setNote] = useState(anchor?.note ?? '')
+  const [err, setErr] = useState<string | null>(null)
+  async function save() {
+    try {
+      setErr(null)
+      if (score === '' || !Number.isFinite(Number(score))) return setErr('Give it a score first.')
+      await put(`/api/packets/${a.code}/${s.code}/anchor`, { score: Number(score), scoreOf: of, note })
+      onDone()
+    } catch (e) { setErr((e as Error).message) }
+  }
+  async function remove() {
+    try { await del(`/api/packets/${a.code}/${s.code}/anchor`); onDone() } catch (e) { setErr((e as Error).message) }
+  }
+  return (
+    <form className="notice col" style={{ gap: 10, borderStyle: 'solid', borderColor: 'var(--accent)' }} onSubmit={(e) => { e.preventDefault(); void save() }}>
+      <div className="over" style={{ fontSize: 10 }}>{anchor ? 'Scoring anchor' : 'Make this packet a scoring anchor'}</div>
+      <div className="row" style={{ gap: 12, alignItems: 'flex-end' }}>
+        <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Your score</span>
+          {rubric.scoring === 'holistic4' ? (
+            <select value={score} onChange={(e) => setScore(e.target.value)} autoFocus><option value="">Choose</option>{[4, 3, 2, 1].map((l) => <option key={l} value={l}>{l} · {LEVEL_NAME[l]}</option>)}</select>
+          ) : (
+            <div className="row"><input type="number" step="0.5" min={0} max={of} value={score} onChange={(e) => setScore(e.target.value)} style={{ width: 80 }} autoFocus /><span className="muted small">of {of}</span></div>
+          )}
+        </label>
+        <label className="col" style={{ gap: 4, flex: 1, minWidth: 260 }}><span className="over quiet" style={{ fontSize: 10 }}>What makes it a {score || '…'} · in your words, one line</span>
+          <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="every section done, two clear events, verbs mostly right" />
+        </label>
+        <button type="submit" className="btn primary">{anchor ? 'Save' : 'Make anchor'}</button>
+        {anchor && <button type="button" className="btn" onClick={() => void remove()}>Remove anchor</button>}
+        {err && <span className="err">{err}</span>}
+      </div>
+      <div className="muted small">The anchor's pages go to Claude with every other packet of {a.code}, under your score and note, and the rest are scored by comparison. Two or three anchors across the range work best; the pages are cached across the run so they cost little extra.</div>
+    </form>
   )
 }
 

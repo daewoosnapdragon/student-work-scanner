@@ -108,6 +108,21 @@ export function splitStudentSection(body: string, domainNames: string[] = [], sk
   return { teacher: t || null, feedback: f || null, domains, corrections: parseCorrectionLines(fixit.join('\n')), criteria, skills, progress: progress.length || followedUp ? { items: progress, followedUp } : null }
 }
 
+/** One anchor as the prompt names it: who, the teacher's score, and why. */
+export interface AnchorForPrompt { student: string; name: string; score: number; scoreOf: number | null; note: string | null; domains?: Array<{ domain: string; level: number }> }
+
+/** The anchors as instructions. Empty string when there are none. */
+export function anchorsText(anchors: AnchorForPrompt[], rubric: Rubric): string {
+  if (!anchors.length) return ''
+  const of = (a: AnchorForPrompt) => (a.scoreOf ?? (rubric.scoring === 'outOf' ? rubric.scoreOf : 4))
+  const lines = anchors.map((a) => `- ${a.name} (${a.student}): ${a.score} of ${of(a)}${a.note ? ` — ${a.note}` : ''}${a.domains?.length ? ` · domains: ${a.domains.map((d) => `${d.domain.split(':')[0].trim()} ${d.level}`).join(', ')}` : ''}`)
+  return [
+    `The teacher has scored ${anchors.length === 1 ? 'one packet' : `${anchors.length} packets`} of this assignment by hand as anchors, to show what each score looks like here:`,
+    ...lines,
+    'Score and rate every other packet by comparison with the anchors: work as good as an anchor gets that anchor\'s score, work between two anchors falls between them, and work clearly beyond the top anchor or below the bottom one goes beyond it. Where the anchors and the rubric\'s wording pull apart, the anchors win: they are what this teacher means by each score. Do not re-score an anchor packet itself against the anchors.',
+  ].join('\n')
+}
+
 /** The rubric as instructions, shared by the in-app analysis and the copied prompt. */
 export function rubricText(r: Rubric, grade: number | null, domains: string[]): string {
   const lines: string[] = []
@@ -166,7 +181,7 @@ export function splitClassAnswer(text: string, codes: string[]): { byStudent: Ma
 // The prompt to paste into Claude beside the class PDF: the assignment, the
 // students in the PDF's order, and the shape the answer should take so it
 // can be pasted straight back.
-export function classPrompt(a: { code: string; title: string; klass: string; grade: number | null; tags: string }, students: Array<{ code: string; name: string; pages: number; history?: string; marks?: string }>, domains: string[] = [], rubric?: Rubric, skills: SkillDef[] = []): string {
+export function classPrompt(a: { code: string; title: string; klass: string; grade: number | null; tags: string }, students: Array<{ code: string; name: string; pages: number; history?: string; marks?: string }>, domains: string[] = [], rubric?: Rubric, skills: SkillDef[] = [], anchors: AnchorForPrompt[] = []): string {
   const used = rubric?.domains && rubric.domains.length ? domains.filter((d) => rubric.domains!.includes(d)) : domains
   const fixitN = used.length ? 5 : 4
   const skillsN = fixitN + 1
@@ -180,6 +195,7 @@ export function classPrompt(a: { code: string; title: string; klass: string; gra
     ...students.map((s) => `- ${s.code}  ${s.name}  (${s.pages} page${s.pages === 1 ? '' : 's'})`),
     '',
     ...(rubric ? [rubricText(rubric, a.grade, domains), ''] : []),
+    ...(rubric && anchors.length ? [anchorsText(anchors, rubric) + ' The anchor packets are in the PDF like the others; read them first.', ''] : []),
     ...(withMarks.length ? ['Some pages carry the teacher\'s marks: thin numbered boxes drawn on the page, listed by number at the end of this prompt. They are the teacher\'s, not the child\'s work, and they are the ground truth: a "fix" mark goes first in that student\'s fix-it table, in the teacher\'s terms; a "praise" mark is quoted in their note; a "note" is context, and a question in one is answered in the teacher part.', ''] : []),
     'Please read every page and write, for each student:',
     '',

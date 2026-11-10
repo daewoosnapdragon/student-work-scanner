@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classPrompt, rubricText, splitClassAnswer, splitStudentSection } from '../server/analysis.js'
+import { anchorsText, classPrompt, rubricText, splitClassAnswer, splitStudentSection } from '../server/analysis.js'
 import { DEFAULT_RUBRIC } from '../shared/types.js'
 import { DEFAULT_SKILLS } from '../shared/skills.js'
 import { parseCorrectionLines } from '../shared/types.js'
@@ -254,5 +254,30 @@ Moving.
     expect(p).not.toContain('## 3D08 Lee Juno\nEarlier')
     const none = classPrompt({ code: 'W23', title: 'My Weekend', klass: 'Daisy', grade: 3, tags: '' }, students.map((s) => ({ ...s, history: undefined })), [], DEFAULT_RUBRIC, DEFAULT_SKILLS)
     expect(none).not.toContain('### Progress')
+  })
+})
+
+describe('scoring anchors', () => {
+  const anchors = [
+    { student: '3D07', name: 'Kim Minji', score: 4, scoreOf: null, note: 'every section done, verbs right', domains: [{ domain: 'Ideas and content', level: 4 }, { domain: 'Language: grammar and vocabulary', level: 3 }] },
+    { student: '3D12', name: 'Park Juno', score: 2, scoreOf: null, note: null },
+  ]
+  it('names each anchor with the teacher\'s score and why, and says to score by comparison', () => {
+    const t = anchorsText(anchors, DEFAULT_RUBRIC)
+    expect(t).toMatch(/^The teacher has scored 2 packets of this assignment by hand as anchors/)
+    expect(t).toContain('- Kim Minji (3D07): 4 of 4 — every section done, verbs right · domains: Ideas and content 4, Language 3')
+    expect(t).toContain('- Park Juno (3D12): 2 of 4')
+    expect(t).toContain('the anchors win')
+    expect(anchorsText([], DEFAULT_RUBRIC)).toBe('')
+  })
+  it('uses the rubric\'s out-of when scoring is out of N', () => {
+    const t = anchorsText([{ student: '3D07', name: 'Kim Minji', score: 7, scoreOf: null, note: null }], { ...DEFAULT_RUBRIC, scoring: 'outOf', scoreOf: 10 })
+    expect(t).toContain('one packet')
+    expect(t).toContain('7 of 10')
+  })
+  it('goes into the copied prompt, pointing at the anchor packets in the PDF', () => {
+    const p = classPrompt({ code: 'W23', title: 'My Weekend', klass: 'Daisy', grade: 3, tags: '' }, [{ code: '3D07', name: 'Kim Minji', pages: 2 }], [], DEFAULT_RUBRIC, [], anchors)
+    expect(p).toContain('Kim Minji (3D07): 4 of 4')
+    expect(p).toContain('The anchor packets are in the PDF like the others; read them first.')
   })
 })
