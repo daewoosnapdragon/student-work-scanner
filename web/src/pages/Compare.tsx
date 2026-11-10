@@ -1,6 +1,7 @@
 import { useSearchParams } from 'react-router-dom'
 import { Link } from 'react-router-dom'
 import { useFetch, fileUrl, sideLabel, type Assignment, type Packet, type Page, type Student } from '../api'
+import { useViewer, type ViewerPage } from '../components/Viewer'
 
 interface SideData { student: Student; packet: Packet | null; pages: Page[] }
 interface Data { assignment: Assignment; sides: Array<{ page: number; side: 'a' | 'b' }>; left: SideData | null; right: SideData | null }
@@ -23,6 +24,22 @@ export default function Compare() {
   const a = data?.assignment
   const klassStudents = roster?.students.filter((s) => !a || s.klass === a.klass) ?? []
   const shown = data ? data.sides.filter((s) => !side || `${s.page}${s.side}` === side) : []
+  const { open } = useViewer()
+  // One viewer page per side: the left child's scan with the right child's as its partner,
+  // so zooming and panning move both. A side only one of them has shows on its own.
+  const viewPages: ViewerPage[] = data ? data.sides.flatMap((sd) => {
+    const find = (d: SideData | null) => d?.pages.find((p) => p.page === sd.page && p.side === sd.side)
+    const l = find(data.left), r = find(data.right)
+    const lab = sideLabel(sd.page, sd.side)
+    if (l && r) return [{ src: fileUrl(l.filePath), label: `${data.left!.student.name} · ${lab}`, sub: `${a!.code} · ${a!.title}`, pair: { src: fileUrl(r.filePath), label: data.right!.student.name } }]
+    const one = l ?? r
+    const who = l ? data.left! : data.right
+    return one && who ? [{ src: fileUrl(one.filePath), label: `${who.student.name} · ${lab}`, sub: `${a!.code} · ${a!.title} · only ${who.student.name} has this side` }] : []
+  }) : []
+  const openSide = (sd: { page: number; side: 'a' | 'b' }) => {
+    const i = viewPages.findIndex((v) => v.label.endsWith(`· ${sideLabel(sd.page, sd.side)}`))
+    if (i >= 0) open(viewPages, i)
+  }
 
   return (
     <main style={{ gap: 28 }}>
@@ -55,8 +72,8 @@ export default function Compare() {
 
       {data && (
         <section className="grid2" style={{ gap: 24 }}>
-          <Column d={data.left} sides={shown} />
-          <Column d={data.right} sides={shown} />
+          <Column d={data.left} sides={shown} onOpen={openSide} />
+          <Column d={data.right} sides={shown} onOpen={openSide} />
         </section>
       )}
 
@@ -70,7 +87,7 @@ export default function Compare() {
   )
 }
 
-function Column({ d, sides }: { d: SideData | null; sides: Array<{ page: number; side: 'a' | 'b' }> }) {
+function Column({ d, sides, onOpen }: { d: SideData | null; sides: Array<{ page: number; side: 'a' | 'b' }>; onOpen: (s: { page: number; side: 'a' | 'b' }) => void }) {
   if (!d) return <div className="notice">Pick a student.</div>
   return (
     <div className="col">
@@ -83,7 +100,7 @@ function Column({ d, sides }: { d: SideData | null; sides: Array<{ page: number;
         return (
           <div key={`${s.page}${s.side}`} className="col" style={{ gap: 4 }}>
             <div className="over quiet" style={{ fontSize: 10 }}>{sideLabel(s.page, s.side)}</div>
-            {pg ? <a href={fileUrl(pg.filePath)} target="_blank" rel="noreferrer"><img className="scan" src={fileUrl(pg.filePath)} alt={`${d.student.name} ${sideLabel(s.page, s.side)}`} loading="lazy" /></a> : <div className="notice">Not scanned.</div>}
+            {pg ? <button type="button" className="scanlink" onClick={() => onOpen(s)} title="Open both children's pages together. Wheel to zoom, drag to move, Esc to close."><img className="scan" src={fileUrl(pg.filePath)} alt={`${d.student.name} ${sideLabel(s.page, s.side)}`} loading="lazy" /></button> : <div className="notice">Not scanned.</div>}
           </div>
         )
       })}

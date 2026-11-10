@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { useFetch } from '../api'
+import { ViewerProvider } from './Viewer'
 
 export default function Shell() {
   const { data } = useFetch<{ items: unknown[] }>('/api/review')
@@ -16,6 +17,7 @@ export default function Shell() {
     return () => { alive = false }
   }, [])
   return (
+    <ViewerProvider>
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
       <header className="top">
         <NavLink to="/" className="serif brand">Student Work</NavLink>
@@ -52,5 +54,6 @@ export default function Shell() {
       )}
       <Outlet />
     </div>
+    </ViewerProvider>
   )
 }

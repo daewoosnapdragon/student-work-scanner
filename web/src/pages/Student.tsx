@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useFetch, fmtDate, fileUrl, sideLabel, type Assignment, type Packet, type Page, type Student } from '../api'
 import ProgressRow from '../components/ProgressRow'
+import { ScanLink, type ViewerPage } from '../components/Viewer'
 
 interface PacketRow extends Packet { assignmentInfo: Assignment | null; pages: Page[] }
 interface Skill { student: string; assignment: string; name: string; level: 'secure' | 'developing' | 'not_yet'; evidence: string | null; at: string }
@@ -17,6 +18,8 @@ export default function StudentPage() {
   if (!data) return <main><p className="muted">Loading</p></main>
   const { student: s, packets } = data
   const latest = data.pages[0]
+  // Every page of this student, newest first, so the arrows walk back through their work.
+  const allPages: ViewerPage[] = data.pages.map((pg) => ({ src: fileUrl(pg.filePath), label: `${pg.assignment} · ${sideLabel(pg.page, pg.side)}`, sub: `${s.name} · ${fmtDate(pg.scannedAt)}` }))
   const complete = packets.filter((p) => p.complete && !p.closedIncomplete).length
   const scored = packets.filter((p) => p.score != null)
   return (
@@ -48,7 +51,7 @@ export default function StudentPage() {
           {latest ? (
             <>
               <div className="small">{latest.assignment} · {sideLabel(latest.page, latest.side)} · {fmtDate(latest.scannedAt)}</div>
-              <a href={fileUrl(latest.filePath)} target="_blank" rel="noreferrer"><img className="scan" src={fileUrl(latest.thumbPath ?? latest.filePath)} alt={`${latest.assignment} ${sideLabel(latest.page, latest.side)}`} style={{ maxWidth: 360 }} /></a>
+              <ScanLink pages={allPages} index={0} style={{ maxWidth: 360 }}><img className="scan" src={fileUrl(latest.thumbPath ?? latest.filePath)} alt={`${latest.assignment} ${sideLabel(latest.page, latest.side)}`} /></ScanLink>
             </>
           ) : <p className="muted" style={{ margin: 0 }}>Nothing scanned yet for {s.name}.</p>}
         </div>
@@ -78,6 +81,14 @@ export default function StudentPage() {
 
 function PacketRows({ p, ratings, open, toggle }: { p: PacketRow; ratings: Rating[]; open: boolean; toggle: () => void }) {
   const a = p.assignmentInfo
+  const panel = (p.note || p.feedback) ? (
+    <>
+      <div className="over" style={{ fontSize: 10 }}>{p.assignment}{a && ` · ${a.title}`}</div>
+      {p.note && <div><div className="over quiet" style={{ fontSize: 10, marginBottom: 4 }}>Analysis · for you</div><p>{p.note}</p></div>}
+      {p.feedback && <div><div className="over quiet" style={{ fontSize: 10, marginBottom: 4 }}>Feedback · for the student</div><p>{p.feedback}</p></div>}
+    </>
+  ) : undefined
+  const viewPages: ViewerPage[] = p.pages.map((pg) => ({ src: fileUrl(pg.filePath), label: `${p.assignment} · ${sideLabel(pg.page, pg.side)}`, sub: a?.title, panel }))
   return (
     <>
       <tr>
@@ -91,11 +102,11 @@ function PacketRows({ p, ratings, open, toggle }: { p: PacketRow; ratings: Ratin
       {open && (
         <tr><td colSpan={6} style={{ background: 'var(--paper)' }}>
           <div className="thumbs">
-            {p.pages.map((pg) => (
-              <a key={pg.id} className="thumb" href={fileUrl(pg.filePath)} target="_blank" rel="noreferrer">
-                <img src={fileUrl(pg.thumbPath ?? pg.filePath)} alt={sideLabel(pg.page, pg.side)} />
+            {p.pages.map((pg, i) => (
+              <div key={pg.id} className="thumb">
+                <ScanLink pages={viewPages} index={i}><img src={fileUrl(pg.thumbPath ?? pg.filePath)} alt={sideLabel(pg.page, pg.side)} /></ScanLink>
                 <span>{sideLabel(pg.page, pg.side)}{pg.filedFrom === 'review' && <span className="muted"> · filed by hand</span>}</span>
-              </a>
+              </div>
             ))}
           </div>
           {p.progress && <div style={{ marginTop: 12 }}><ProgressRow raw={p.progress} compact /></div>}

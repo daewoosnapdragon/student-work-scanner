@@ -56,6 +56,8 @@ Open http://localhost:4710. Ten pages file themselves. One has its code torn off
 3. The code reads `SWS1|S07|W23|2b`: student S07, assignment W23, sheet 2, back. If the student and assignment exist, the side is one the assignment expects and that side is not already filed, the page moves to `data/archive/W23/S07/2b.jpg` and the packet count goes up. A packet is complete when every expected side is in.
 4. Otherwise the page goes to `data/holding/` and the review queue, with a reason. For an unreadable code the guesses come from scan order: the pages just before and after it say whose stack this came from, and which side that packet is still missing. A packet that stops arriving before it is complete also shows up in review after two hours, to be filed as it is.
 
+Clicking any scan opens it over the current screen rather than in a new tab: wheel or pinch to zoom, drag to move, arrow keys to step through the packet's sides (on a student's page, through all their work), R to turn it, 0 to fit, Escape or the browser's Back to close. Where there is analysis, its notes sit beside the page. On Compare, the two children's pages open together and zoom and move as one.
+
 Review is keyboard first: J and K move, 1 to 3 pick a guess, Enter files, X skips, R rotates. Skip everything in the queue clears a backlog in one go, for example old scans without codes that were already in the folder when the program first started. Skipped pages stay on disk under `data/holding/`.
 
 Before the first run, empty the scan folder of old scans, or expect them all in review.

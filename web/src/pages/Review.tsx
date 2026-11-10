@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useViewer } from '../components/Viewer'
 import { Link } from 'react-router-dom'
 import { get, post, useFetch, ago, fmtTime, fileUrl, sideLabel, type Assignment, type Guess, type Page, type ReviewItem, type Student } from '../api'
 
@@ -14,6 +15,7 @@ export default function Review() {
   const [err, setErr] = useState<string | null>(null)
   const [rotate, setRotate] = useState(0)
   const [zoom, setZoom] = useState(false)
+  const { open: openViewer } = useViewer()
 
   const items = data?.items ?? []
   const item = items[Math.min(idx, Math.max(0, items.length - 1))]
@@ -130,7 +132,9 @@ export default function Review() {
             </div>
             {page ? (
               <div style={{ overflow: 'auto', maxHeight: zoom ? 'none' : 720 }}>
-                <img className="scan" src={fileUrl(page.filePath)} alt="Page in review" style={{ transform: `rotate(${rotate}deg)`, width: zoom ? '160%' : '100%' }} />
+                <button type="button" className="scanlink" onClick={() => openViewer([{ src: fileUrl(page.filePath), label: page.sourceName, sub: item.problem }])} title="Open large. Wheel to zoom, drag to move, Esc to close." style={{ width: zoom ? '160%' : '100%' }}>
+                  <img className="scan" src={fileUrl(page.filePath)} alt="Page in review" style={{ transform: `rotate(${rotate}deg)` }} />
+                </button>
               </div>
             ) : (
               <div className="notice">This is a packet, not a page: {item.student} on {item.assignment}. The pages that did arrive are on <Link to={`/assignments/${item.assignment}`}>the assignment</Link>.</div>
@@ -140,7 +144,7 @@ export default function Review() {
                 <span className="muted small">{page.decoded ? `Code read: ${page.decoded}` : 'No code could be read on the page.'}</span>
                 <button className="btn" style={{ marginLeft: 'auto' }} onClick={() => setRotate((r) => (r + 90) % 360)}>Rotate</button>
                 <button className="btn" onClick={() => setZoom((z) => !z)}>{zoom ? 'Fit' : 'Zoom'}</button>
-                <a className="btn" href={fileUrl(page.filePath)} target="_blank" rel="noreferrer">Open</a>
+                <button className="btn" onClick={() => openViewer([{ src: fileUrl(page.filePath), label: page.sourceName, sub: item.problem }])}>Open large</button>
               </div>
             )}
           </div>
