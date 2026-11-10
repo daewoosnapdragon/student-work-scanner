@@ -76,6 +76,8 @@ Settings (top right) takes a Claude API key from console.anthropic.com; it is st
 
 The domains (Ideas and content, Organization, Language, Spelling and punctuation, Task completion by default) are a list in Settings. The assignment page shows an overview table of students by domain, each packet's chips can be rated by hand, and **Print record** prints the table in landscape followed by every student's notes and feedback, for the teacher's files. The student page gathers the skills into Focus right now and a skill arc across assignments.
 
+Skills come from a fixed vocabulary, also in Settings, so that a skill is called the same thing on every assignment and a child's progress on it can be followed: Claude picks names from the list, a pasted answer's `### Skills` lines are folded onto it (other names for a skill, such as "verb agreement" for "subject-verb agreement", are listed after a `|`), and the student page groups the skill arc by the list's groups. Editing the list renames the skills already recorded. The list is at `/api/skills` for Worksheet Studio, and a rubric focus that names a skill takes the list's name.
+
 Each assignment has a **Rubric** card, read by Analyse with Claude and by Copy prompt alike: success criteria (one a line, each checked met or not yet for every student; empty, Claude works them out from the worksheet), which domains apply and what a 4 looks like for this task, a focus (what you have been teaching), tone and length of the student note, the fix-it row cap, and how to score (1 to 4 holistic, out of N, or not at all). The student's note never mentions the score. When Worksheet Studio prints a class set it seeds the rubric with the worksheet's objective and skill.
 
 Without a key, the manual round trip still works: Class PDF, Copy prompt (which asks for the same Teacher, Feedback and Domains parts), Paste class answer.
@@ -83,6 +85,8 @@ Without a key, the manual round trip still works: Class PDF, Copy prompt (which 
 ## Printing from Worksheet Studio
 
 Worksheet Studio's Print… dialog has a Class set row. It reads the class list from this program (at `http://localhost:4710`, so the scanner must be running on the same computer, or have been once), prints one copy per student with the code already in the corner and the name on the name line, and registers the assignment here. Nothing to stick on.
+
+Studio can read the skill vocabulary at `GET /api/skills` (`{ skills: [{ name, group, aliases }], groups: [{ group, skills }] }`) and tag a worksheet's skill with one of those names; sent as `rubric.focus` when the assignment is registered, it is the same name the analysis then reports, so the worksheet's target and the child's record line up.
 
 ## Labels
 
@@ -113,7 +117,7 @@ Assignments are added on the Assignments page. An assignment belongs to a class 
 
 - `server/` Express API, SQLite (Node's built-in `node:sqlite`, so no native build step), the watcher, decoder and filing pipeline, the Claude analysis step (`claude.ts`) and the pasted-answer parser (`analysis.ts`).
 - `web/` Vite and React. Six screens, styled from the mockup.
-- `shared/types.ts` the shapes both sides use.
+- `shared/types.ts` the shapes both sides use; `shared/skills.ts` the skill vocabulary and the matching that folds free text onto it.
 - `scripts/` roster import, demo seed, sample scan generator (uses whatever roster is loaded), `decode-check.ts` to test the decoder on real scans that are not being read.
 - `tests/` vitest unit tests for the code format, packets and review guesses.
 - `windows/` the start script, shortcut maker and icon for a taskbar launcher.

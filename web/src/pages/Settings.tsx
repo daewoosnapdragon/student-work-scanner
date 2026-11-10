@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { get, post } from '../api'
 
-interface Settings { hasKey: boolean; keyHint: string | null; model: string; auto: boolean; context: string; domains: string[] }
+interface Settings { hasKey: boolean; keyHint: string | null; model: string; auto: boolean; context: string; domains: string[]; skills: string }
+
+const TA = { width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' } as const
 
 const MODELS = [
   { id: 'claude-opus-5-5', label: 'Claude Opus 5.5 · best reading of handwriting, about 5¢ a packet' },
@@ -16,13 +18,15 @@ export default function SettingsPage() {
   const [auto, setAuto] = useState(false)
   const [context, setContext] = useState('')
   const [domains, setDomains] = useState('')
+  const [skills, setSkills] = useState('')
   const [msg, setMsg] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
-  useEffect(() => { get<Settings>('/api/settings').then((d) => { setS(d); setModel(d.model); setAuto(d.auto); setContext(d.context); setDomains(d.domains.join('\n')) }) }, [])
+  useEffect(() => { get<Settings>('/api/settings').then((d) => { setS(d); setModel(d.model); setAuto(d.auto); setContext(d.context); setDomains(d.domains.join('\n')); setSkills(d.skills) }) }, [])
 
-  async function save(extra: Partial<{ apiKey: string | null }> = {}) {
-    const d = await post<Settings>('/api/settings', { model, auto, context, domains: domains.split('\n').map((x) => x.trim()).filter(Boolean), ...extra })
+  async function save(extra: Partial<{ apiKey: string | null; skills: string }> = {}) {
+    const d = await post<Settings>('/api/settings', { model, auto, context, domains: domains.split('\n').map((x) => x.trim()).filter(Boolean), skills, ...extra })
     setS(d)
+    setSkills(d.skills)
     setKey('')
     setMsg('Saved.')
   }
@@ -75,6 +79,22 @@ export default function SettingsPage() {
           <span className="muted small">Every analysis rates each of these, and the assignment's overview table and printed record use them as columns. Keep the names short; a colon separates a name from its detail, as in "Language: grammar and vocabulary".</span>
         </label>
         <div className="row"><button className="btn primary" onClick={() => void save()}>Save</button>{msg && <span className="small">{msg}</span>}</div>
+      </section>
+
+      <section className="card" style={{ gap: 14, padding: 20 }}>
+        <div className="over quiet">Skill names</div>
+        <p className="small" style={{ margin: 0 }}>
+          The analysis names the skills each piece of work shows, and the student page follows them from one assignment to the next. That only works when a skill is always called the same thing, so every name comes from this list: Claude picks from it, a pasted answer is folded onto it, and Worksheet Studio reads it (at <code>/api/skills</code>) to tag worksheets with the same names.
+        </p>
+        <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>One skill a line · <code># Group</code> starts a group · after <code>|</code>, other names for the same skill, comma separated</span>
+          <textarea value={skills} onChange={(e) => setSkills(e.target.value)} rows={18} spellCheck={false} style={{ ...TA, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', fontSize: 12.5, lineHeight: 1.5 }} />
+          <span className="muted small">Renaming a skill here renames it everywhere it has been recorded. The other names matter: "verb agreement" or "she go" in a pasted answer both become "subject-verb agreement".</span>
+        </label>
+        <div className="row">
+          <button className="btn primary" onClick={() => void save()}>Save</button>
+          <button className="btn" onClick={() => { if (window.confirm('Put the default list back? Your edits to the skill names are lost; recorded skills are refiled under the default names.')) void save({ skills: '' }) }}>Reset to default</button>
+          {msg && <span className="small">{msg}</span>}
+        </div>
       </section>
 
       <section className="col" style={{ gap: 8 }}>

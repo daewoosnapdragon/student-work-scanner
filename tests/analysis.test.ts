@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { classPrompt, rubricText, splitClassAnswer, splitStudentSection } from '../server/analysis.js'
 import { DEFAULT_RUBRIC } from '../shared/types.js'
+import { DEFAULT_SKILLS } from '../shared/skills.js'
 import { parseCorrectionLines } from '../shared/types.js'
 
 const codes = ['4S18', '4S15', '4M27']
@@ -74,7 +75,7 @@ describe('splitting one student section into teacher and feedback parts', () => 
   })
   it('is all for the teacher when nothing marks a feedback part', () => {
     const r = splitStudentSection('Just notes.')
-    expect(r).toEqual({ teacher: 'Just notes.', feedback: null, domains: [], corrections: [], criteria: [] })
+    expect(r).toEqual({ teacher: 'Just notes.', feedback: null, domains: [], corrections: [], criteria: [], skills: [] })
   })
   it('keeps the prompt asking for both parts', () => {
     const p = classPrompt({ code: 'W04', title: 'T', klass: 'K', grade: 4, tags: '' }, [{ code: '4S18', name: 'Lee Yoona', pages: 3 }])
@@ -184,5 +185,39 @@ Fine.
     expect(p).toContain('### Criteria')
     expect(p).toContain('- a sign-off: met — (the evidence)')
     expect(p).toContain('Never a score, mark or level')
+  })
+})
+
+describe('skills in a pasted answer', () => {
+  it('reads a Skills section and folds the names onto the vocabulary', () => {
+    const parts = splitStudentSection(`### Teacher
+Good control of sentences.
+### Feedback
+Nice work, Minji.
+### Skills
+- Past tense verbs: developing — "she goed home"
+- **Capitalization**: secure
+- verb agreement: not yet — "he like pizza"
+- rhyming couplets: secure
+- Past tense: secure — repeated, dropped
+`, [], DEFAULT_SKILLS)
+    expect(parts.teacher).toBe('Good control of sentences.')
+    expect(parts.feedback).toBe('Nice work, Minji.')
+    expect(parts.skills).toEqual([
+      { name: 'past tense', level: 'developing', evidence: 'she goed home', known: true },
+      { name: 'capital letters', level: 'secure', evidence: null, known: true },
+      { name: 'subject-verb agreement', level: 'not_yet', evidence: 'he like pizza', known: true },
+      { name: 'rhyming couplets', level: 'secure', evidence: null, known: false },
+    ])
+  })
+  it('the copied prompt lists the vocabulary and asks for a Skills part', () => {
+    const p = classPrompt({ code: 'W23', title: 'My Weekend', klass: 'Daisy', grade: 3, tags: '' }, [{ code: '3D07', name: 'Kim Minji', pages: 2 }], [], DEFAULT_RUBRIC, DEFAULT_SKILLS)
+    expect(p).toContain('Sentences and grammar: complete sentences; subject-verb agreement;')
+    expect(p).toContain('### Skills')
+    expect(p).toMatch(/"### Fix-it" and "### Skills" inside each/)
+  })
+  it('without a vocabulary the prompt asks for no skills', () => {
+    const p = classPrompt({ code: 'W23', title: 'My Weekend', klass: 'Daisy', grade: 3, tags: '' }, [{ code: '3D07', name: 'Kim Minji', pages: 2 }], [], DEFAULT_RUBRIC)
+    expect(p).not.toContain('### Skills')
   })
 })

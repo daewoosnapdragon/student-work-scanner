@@ -308,6 +308,23 @@ export function replaceSkills(student: string, assignment: string, skills: Array
   const ins = d.prepare('INSERT OR REPLACE INTO skills (student, assignment, name, level, evidence, at) VALUES (?,?,?,?,?,?)')
   for (const k of skills) ins.run(student, assignment, k.name.trim().toLowerCase(), k.level, k.evidence, k.at)
 }
+export function allSkills(): SkillRow[] {
+  return getDb().prepare('SELECT * FROM skills ORDER BY student, assignment, name').all() as unknown as SkillRow[]
+}
+/** Replaces the whole skills table, in one transaction. Used when the vocabulary changes. */
+export function writeSkillRows(rows: SkillRow[]) {
+  const d = getDb()
+  const ins = d.prepare('INSERT OR REPLACE INTO skills (student, assignment, name, level, evidence, at) VALUES (?,?,?,?,?,?)')
+  d.exec('BEGIN')
+  try {
+    d.exec('DELETE FROM skills')
+    for (const r of rows) ins.run(r.student, r.assignment, r.name, r.level, r.evidence, r.at)
+    d.exec('COMMIT')
+  } catch (err) {
+    d.exec('ROLLBACK')
+    throw err
+  }
+}
 export function skillsForStudent(student: string): SkillRow[] {
   return getDb().prepare('SELECT * FROM skills WHERE student = ? ORDER BY at, name').all(student) as unknown as SkillRow[]
 }

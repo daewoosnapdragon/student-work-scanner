@@ -5,7 +5,7 @@ import { useFetch, fmtDate, fileUrl, sideLabel, type Assignment, type Packet, ty
 interface PacketRow extends Packet { assignmentInfo: Assignment | null; pages: Page[] }
 interface Skill { student: string; assignment: string; name: string; level: 'secure' | 'developing' | 'not_yet'; evidence: string | null; at: string }
 interface Rating { student: string; assignment: string; domain: string; level: number; note: string | null; at: string }
-interface Data { student: Student; packets: PacketRow[]; missing: Assignment[]; pages: Page[]; skills: Skill[]; ratings: Rating[]; domains: string[] }
+interface Data { student: Student; packets: PacketRow[]; missing: Assignment[]; pages: Page[]; skills: Skill[]; ratings: Rating[]; domains: string[]; skillGroups: Record<string, string> }
 const LEVEL_BG: Record<number, string> = { 4: '#dff0e5', 3: '#eef5e9', 2: '#fff3d6', 1: '#f8dcd8' }
 
 export default function StudentPage() {
@@ -53,7 +53,7 @@ export default function StudentPage() {
         </div>
       </section>
 
-      {data.skills.length > 0 && <Arc skills={data.skills} packets={packets} />}
+      {data.skills.length > 0 && <Arc skills={data.skills} packets={packets} groups={data.skillGroups ?? {}} />}
 
       <section className="col sep" style={{ gap: 14 }}>
         <div className="between">
@@ -140,10 +140,18 @@ function Focus({ skills }: { skills: Skill[] }) {
   )
 }
 
-// Skills across assignments, oldest to newest: a dot per reading.
-function Arc({ skills, packets }: { skills: Skill[]; packets: PacketRow[] }) {
+// Skills across assignments, oldest to newest: a dot per reading. Rows sit
+// under their vocabulary group, the ones still developing first within each.
+function Arc({ skills, packets, groups }: { skills: Skill[]; packets: PacketRow[]; groups: Record<string, string> }) {
   const cols = [...new Set(skills.map((k) => k.assignment))].sort((a, b) => (skills.find((k) => k.assignment === a)!.at).localeCompare(skills.find((k) => k.assignment === b)!.at))
-  const names = latestSkills(skills).map((k) => k.name)
+  const byLevel = latestSkills(skills).map((k) => k.name)
+  const groupOrder = [...new Set(Object.values(groups))]
+  const groupOf = (n: string) => groups[n] ?? 'Other'
+  const names = [...byLevel].sort((a, b) => {
+    const ga = groupOrder.indexOf(groupOf(a)), gb = groupOrder.indexOf(groupOf(b))
+    return (ga === -1 ? 1e9 : ga) - (gb === -1 ? 1e9 : gb) || byLevel.indexOf(a) - byLevel.indexOf(b)
+  })
+  const showGroups = new Set(names.map(groupOf)).size > 1
   const titleOf = (code: string) => packets.find((p) => p.assignment === code)?.assignmentInfo?.title ?? code
   return (
     <section className="col sep" style={{ gap: 12 }}>
@@ -155,9 +163,9 @@ function Arc({ skills, packets }: { skills: Skill[]; packets: PacketRow[] }) {
         <table>
           <thead><tr><th>Skill</th>{cols.map((c) => <tr key={c} style={{ display: 'contents' }}><th style={{ textAlign: 'center' }} title={titleOf(c)}>{c}<div className="muted" style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>{fmtDate(skills.find((k) => k.assignment === c)!.at)}</div></th></tr>)}</tr></thead>
           <tbody>
-            {names.map((n) => (
+            {names.map((n, i) => (
               <tr key={n}>
-                <td style={{ fontWeight: 600 }}>{n}</td>
+                <td style={{ fontWeight: 600 }}>{showGroups && (i === 0 || groupOf(names[i - 1]) !== groupOf(n)) && <div className="over quiet" style={{ fontSize: 10, marginBottom: 2 }}>{groupOf(n)}</div>}{n}</td>
                 {cols.map((c) => { const k = skills.find((x) => x.name === n && x.assignment === c); return <td key={c} style={{ textAlign: 'center' }} title={k ? `${LEVEL_LABEL[k.level]}${k.evidence ? `: ${k.evidence}` : ''}` : 'no sample'}>{k ? <span className="dot" style={{ background: LEVEL_COLOR[k.level], width: 12, height: 12, marginRight: 0 }} /> : <span className="muted">·</span>}</td> })}
               </tr>
             ))}

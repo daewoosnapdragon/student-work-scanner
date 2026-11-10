@@ -4,8 +4,11 @@
 // comes before the first code, or under a heading that says Class, is the
 // class's own section.
 import { parseCorrectionLines, type Correction, type CriterionResult, type Rubric } from '../shared/types.js'
+import { canonicalSkillName, skillListForPrompt, type SkillDef } from '../shared/skills.js'
 
-export interface StudentParts { teacher: string | null; feedback: string | null; domains: Array<{ domain: string; level: number; note: string | null }>; corrections: Correction[]; criteria: CriterionResult[] }
+export type SkillLevel = 'secure' | 'developing' | 'not_yet'
+export interface SkillPart { name: string; level: SkillLevel; evidence: string | null; known: boolean }
+export interface StudentParts { teacher: string | null; feedback: string | null; domains: Array<{ domain: string; level: number; note: string | null }>; corrections: Correction[]; criteria: CriterionResult[]; skills: SkillPart[] }
 
 // A domain line: "- Ideas and content: 3 — uses the frame well" (the dash, colon and note optional).
 const DOMAIN_LINE = /^[-*•]?\s*(?:\*\*)?([^:*]{3,60}?)(?:\*\*)?\s*:(?:\*\*)?\s*(?:\*\*)?\s*([1-4])(?:\s*\/\s*4)?(?:\*\*)?\s*(?:[—–-]|:)?\s*(.*)$/
@@ -19,17 +22,22 @@ const TEACHER_LINE = /^(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:teacher|for the teacher|a
 const DOMAINS_LINE = /^(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:domains|ratings|rubric)\s*:?\s*(?:\*\*|__)?\s*:?\s*$/i
 const FIXIT_LINE = /^(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:fix[- ]?it|fix[- ]?it table|corrections|proofreading)\s*:?\s*(?:\*\*|__)?\s*:?\s*$/i
 const CRITERIA_LINE = /^(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:criteria|success criteria|checklist)\s*:?\s*(?:\*\*|__)?\s*:?\s*$/i
+const SKILLS_LINE = /^(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:skills|skills shown|skills seen)\s*:?\s*(?:\*\*|__)?\s*:?\s*$/i
+// "- past tense: developing — 'she goed'" or "- capital letters: secure"
+const SKILL_ITEM = /^[-*•]?\s*(.+?)\s*:\s*(secure|strong|developing|emerging|not yet|not_yet|beginning)\b\.?\s*(?:[—–-]\s*(.+))?$/i
+const SKILL_LEVEL: Record<string, SkillLevel> = { secure: 'secure', strong: 'secure', developing: 'developing', emerging: 'developing', 'not yet': 'not_yet', not_yet: 'not_yet', beginning: 'not_yet' }
 // "- a sign-off: met — 'Bye, future me'" or "- a wish for future me: not yet"
 const CRITERION_ITEM = /^[-*•]?\s*(?:\[([ xX✓✔])\]\s*)?(.+?)\s*:\s*(met|yes|done|✓|✔|not yet|no|missing|✗|×|partly|partial)\b\.?\s*(?:[—–-]\s*(.+))?$/i
 
-export function splitStudentSection(body: string, domainNames: string[] = []): StudentParts {
+export function splitStudentSection(body: string, domainNames: string[] = [], skillDefs: SkillDef[] = []): StudentParts {
   const lines = body.split('\n')
   const teacher: string[] = []
   const feedback: string[] = []
   const domains: StudentParts['domains'] = []
   const fixit: string[] = []
   const criteria: CriterionResult[] = []
-  let into: 'teacher' | 'feedback' | 'domains' | 'fixit' | 'criteria' = 'teacher'
+  const skills: SkillPart[] = []
+  let into: 'teacher' | 'feedback' | 'domains' | 'fixit' | 'criteria' | 'skills' = 'teacher'
   const known = domainNames.map((d) => d.toLowerCase())
   const matchDomain = (name: string): string | null => {
     const n = name.trim().toLowerCase().replace(/[*_]/g, '')
@@ -41,7 +49,16 @@ export function splitStudentSection(body: string, domainNames: string[] = []): S
     if (DOMAINS_LINE.test(line)) { into = 'domains'; continue }
     if (FIXIT_LINE.test(line)) { into = 'fixit'; continue }
     if (CRITERIA_LINE.test(line)) { into = 'criteria'; continue }
+    if (SKILLS_LINE.test(line)) { into = 'skills'; continue }
     if (into === 'fixit') { if (line) fixit.push(line); continue }
+    if (into === 'skills') {
+      const m = SKILL_ITEM.exec(line.replace(/\*\*|__/g, ''))
+      if (m) {
+        const { name, known } = canonicalSkillName(m[1], skillDefs)
+        if (name && !skills.some((k) => k.name === name)) skills.push({ name, level: SKILL_LEVEL[m[2].toLowerCase()], evidence: m[3]?.trim().replace(/^["“]|["”]$/g, '') || null, known })
+      }
+      continue
+    }
     if (into === 'criteria') {
       const m = CRITERION_ITEM.exec(line.replace(/\*\*|__/g, ''))
       if (m) criteria.push({ criterion: m[2].trim(), met: /^(met|yes|done|✓|✔)$/i.test(m[3]) || /[xX✓✔]/.test(m[1] ?? ''), evidence: m[4]?.trim() || null })
@@ -60,7 +77,7 @@ export function splitStudentSection(body: string, domainNames: string[] = []): S
     ;(into === 'teacher' ? teacher : feedback).push(raw)
   }
   const t = teacher.join('\n').trim(), f = feedback.join('\n').trim()
-  return { teacher: t || null, feedback: f || null, domains, corrections: parseCorrectionLines(fixit.join('\n')), criteria }
+  return { teacher: t || null, feedback: f || null, domains, corrections: parseCorrectionLines(fixit.join('\n')), criteria, skills }
 }
 
 /** The rubric as instructions, shared by the in-app analysis and the copied prompt. */
@@ -121,8 +138,10 @@ export function splitClassAnswer(text: string, codes: string[]): { byStudent: Ma
 // The prompt to paste into Claude beside the class PDF: the assignment, the
 // students in the PDF's order, and the shape the answer should take so it
 // can be pasted straight back.
-export function classPrompt(a: { code: string; title: string; klass: string; grade: number | null; tags: string }, students: Array<{ code: string; name: string; pages: number }>, domains: string[] = [], rubric?: Rubric): string {
+export function classPrompt(a: { code: string; title: string; klass: string; grade: number | null; tags: string }, students: Array<{ code: string; name: string; pages: number }>, domains: string[] = [], rubric?: Rubric, skills: SkillDef[] = []): string {
   const used = rubric?.domains && rubric.domains.length ? domains.filter((d) => rubric.domains!.includes(d)) : domains
+  const fixitN = used.length ? 5 : 4
+  const skillsN = fixitN + 1
   const lines = [
     `Attached is a PDF of scanned student work: "${a.title}" (${a.code}), ${a.klass}${a.grade != null ? ` grade ${a.grade}` : ''}${a.tags ? `, on ${a.tags}` : ''}. Each page has a header with the student's name and code; one student's pages follow each other.`,
     '',
@@ -136,7 +155,8 @@ export function classPrompt(a: { code: string; title: string; klass: string; gra
     `2. For the student: a note the child reads themselves${a.grade != null ? `, pitched at grade ${a.grade}` : ''}. Specific: one thing they did well, quoting their own words, and one thing to try next time. Never a score, mark or level in this part. Address them by their first name.`,
     `3. Criteria: each success criterion as "- criterion: met" or "- criterion: not yet", with the evidence after a dash.`,
     ...(used.length ? [`4. Ratings, 1 to 4 (4 strong, 3 secure, 2 developing, 1 beginning) against what this grade can be expected to do, one line each with a short reason, for exactly these domains: ${used.join('; ')}.`] : []),
-    `${used.length ? 5 : 4}. A fix-it table for the student: the mistakes most worth fixing, only ones actually on the page, most important first, at most ${rubric?.fixitMax ?? (a.grade != null && a.grade <= 2 ? 3 : 6)}. Each line: exactly what they wrote → the corrected words — the rule in one short sentence a child understands.`,
+    `${fixitN}. A fix-it table for the student: the mistakes most worth fixing, only ones actually on the page, most important first, at most ${rubric?.fixitMax ?? (a.grade != null && a.grade <= 2 ? 3 : 6)}. Each line: exactly what they wrote → the corrected words — the rule in one short sentence a child understands.`,
+    ...(skills.length ? [`${skillsN}. Skills: the 3 to 7 skills the work gives the clearest evidence for, each "- skill: secure", "developing" or "not yet", with one phrase from the page after a dash. Use only these names, exactly as written, so the same skill is tracked across assignments:`, skillListForPrompt(skills)] : []),
     '',
     'Format the answer exactly like this, so it can be filed by code:',
     '',
@@ -151,11 +171,12 @@ export function classPrompt(a: { code: string; title: string; klass: string; gra
     '### Fix-it',
     '- did you became → did you become — after "did", the verb stays plain',
     '- were do you live → where do you live — "where" asks about a place',
+    ...(skills.length ? ['### Skills', `- ${skills[0].name}: developing — (a phrase from the page)`, `- ${skills[Math.min(1, skills.length - 1)].name}: secure — (a phrase from the page)`] : []),
     '',
     '## Class',
     '(what the whole class shows: shared strengths, the common gaps, and what to teach next)',
     '',
-    `Use one "## CODE Name" heading per student, every student, in the order above, with "### Teacher", "### Feedback", "### Criteria"${used.length ? ', "### Domains"' : ''} and "### Fix-it" inside each, and the "## Class" heading last.`,
+    `Use one "## CODE Name" heading per student, every student, in the order above, with "### Teacher", "### Feedback", "### Criteria"${used.length ? ', "### Domains"' : ''}, "### Fix-it"${skills.length ? ' and "### Skills"' : ''} inside each, and the "## Class" heading last.`,
   ]
   return lines.join('\n')
 }

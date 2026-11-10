@@ -14,7 +14,9 @@ import { abs, fileFromReview, reorderPacket, skipAllInReview, skipFromReview, st
 import { buildPdf } from '../pdf.js'
 import { classPrompt, splitClassAnswer, splitStudentSection } from '../analysis.js'
 import { enqueueAssignment, enqueueClass, enqueuePacket, getSettings, queueStatus, saveSettings, testKey, domainList, domainsFor, LEVELS } from '../claude.js'
-import { skillsForStudent, skillsForAssignment, domainsForAssignment, domainsForStudent, replaceDomains, setPacketCorrections, setPacketCriteria, setAssignmentRubric } from '../db.js'
+import { skillsForStudent, skillsForAssignment, domainsForAssignment, domainsForStudent, replaceDomains, replaceSkills, setPacketCorrections, setPacketCriteria, setAssignmentRubric } from '../db.js'
+import { canonicalSkill, skillVocabulary } from '../skills.js'
+import { skillGroups } from '../../shared/skills.js'
 import { parseCorrectionLines, parseCorrections, parseCriteria, parseRubric, DEFAULT_RUBRIC, type Rubric } from '../../shared/types.js'
 import { watcherStatus } from '../watcher.js'
 import { formatCode, sideLabel } from '../codes.js'
@@ -129,7 +131,7 @@ api.get('/students/:code', (req, res) => {
   const packets = packetsForStudent(s.code).map((p) => ({ ...p, assignmentInfo: getAssignment(p.assignment) ?? null, pages: packetPages(p.student, p.assignment) }))
   const assigned = listAssignments().filter((a) => a.klass === s.klass && (a.grade == null || s.grade == null || a.grade === s.grade))
   const missing = assigned.filter((a) => !getPacket(s.code, a.code))
-  res.json({ student: s, packets, missing, pages: pagesForStudent(s.code), skills: skillsForStudent(s.code), ratings: domainsForStudent(s.code), domains: domainList() })
+  res.json({ student: s, packets, missing, pages: pagesForStudent(s.code), skills: skillsForStudent(s.code), ratings: domainsForStudent(s.code), domains: domainList(), skillGroups: Object.fromEntries(skillVocabulary().map((d) => [d.name, d.group])) })
 })
 
 // ---------- Assignments ----------
@@ -180,7 +182,8 @@ function cleanRubric(b: Partial<Rubric>): Rubric {
     propose: r.propose !== false,
     domains: Array.isArray(r.domains) ? r.domains.map(String) : null,
     domainNotes: r.domainNotes && typeof r.domainNotes === 'object' ? Object.fromEntries(Object.entries(r.domainNotes).filter(([, v]) => typeof v === 'string' && v.trim()).map(([k, v]) => [k, String(v).trim()])) : {},
-    focus: Array.isArray(r.focus) ? r.focus.map(String).map((c) => c.trim()).filter(Boolean).slice(0, 8) : [],
+    // A focus that names a skill from the vocabulary takes the vocabulary's name, so Studio's tag and the analysis line up.
+    focus: Array.isArray(r.focus) ? [...new Set(r.focus.map(String).map((c) => c.trim()).filter(Boolean).map((c) => { const k = canonicalSkill(c); return k.known ? k.name : c }))].slice(0, 8) : [],
     tone: (['warm', 'plain', 'playful'] as const).includes(r.tone) ? r.tone : 'warm',
     length: (['short', 'standard', 'full'] as const).includes(r.length) ? r.length : 'standard',
     fixitMax: Math.max(0, Math.min(10, Number(r.fixitMax ?? 6) || 6)),
@@ -218,9 +221,10 @@ api.post('/assignments/:code/analysis/paste', (req, res) => {
   for (const [student, body] of byStudent) {
     const pk = packets.find((p) => p.student === student)
     if (!pk) continue
-    const parts = splitStudentSection(body, domainList())
+    const parts = splitStudentSection(body, domainList(), skillVocabulary())
     setPacketScore(student, code, pk.score, pk.scoreOf, parts.teacher ?? body)
     if (parts.feedback) { setPacketFeedback(student, code, parts.feedback); withFeedback++ }
+    if (parts.skills.length) replaceSkills(student, code, parts.skills.map((k) => ({ name: k.name, level: k.level, evidence: k.evidence ?? '', at: pk.lastAt })))
     if (parts.domains.length) replaceDomains(student, code, parts.domains, pk.lastAt)
     if (parts.corrections.length) setPacketCorrections(student, code, parts.corrections)
     if (parts.criteria.length) setPacketCriteria(student, code, parts.criteria)
@@ -236,7 +240,7 @@ api.get('/assignments/:code/prompt', (req, res) => {
   if (!a) return res.status(404).json({ error: 'no such assignment' })
   const students = packetsForAssignment(code).map((p) => ({ code: p.student, name: getStudent(p.student)?.name ?? p.student, pages: packetPages(p.student, code).length })).sort((x, y) => x.name.localeCompare(y.name))
   const rubric = parseRubric(a.rubric)
-  res.type('text').send(classPrompt(a, students, domainsFor(rubric), rubric))
+  res.type('text').send(classPrompt(a, students, domainsFor(rubric), rubric, skillVocabulary()))
 })
 
 // The whole class as one PDF, students in name order, each page under a header line.
@@ -437,7 +441,7 @@ api.post('/review/packet/:assignment/:student/close', (req, res) => {
 api.get('/settings', (_req, res) => res.json(getSettings()))
 api.post('/settings', (req, res) => {
   const b = req.body ?? {}
-  saveSettings({ apiKey: b.apiKey === undefined ? undefined : (b.apiKey || null), model: b.model, auto: b.auto === undefined ? undefined : !!b.auto, context: b.context, domains: Array.isArray(b.domains) ? b.domains.map(String) : undefined })
+  saveSettings({ apiKey: b.apiKey === undefined ? undefined : (b.apiKey || null), model: b.model, auto: b.auto === undefined ? undefined : !!b.auto, context: b.context, domains: Array.isArray(b.domains) ? b.domains.map(String) : undefined, skills: typeof b.skills === 'string' ? b.skills : undefined })
   res.json(getSettings())
 })
 api.post('/settings/test', async (_req, res) => res.json(await testKey()))
@@ -463,6 +467,11 @@ api.post('/analyse/class/:code', (req, res) => {
   if (!getSettings().hasKey) return res.status(400).json({ error: 'No API key yet. Add one in Settings.' })
   enqueueClass(code)
   res.json(queueStatus())
+})
+// The skill vocabulary, for Worksheet Studio to tag worksheets with the same names the analysis uses.
+api.get('/skills', (_req, res) => {
+  const defs = skillVocabulary()
+  res.json({ skills: defs, groups: skillGroups(defs) })
 })
 api.get('/skills/student/:code', (req, res) => res.json(skillsForStudent(req.params.code.toUpperCase())))
 api.get('/skills/assignment/:code', (req, res) => res.json(skillsForAssignment(req.params.code.toUpperCase())))

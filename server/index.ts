@@ -8,9 +8,13 @@ import { startWatcher } from './watcher.js'
 import { api, files, print, setBuild } from './routes/api.js'
 import { onPacketComplete } from './claude.js'
 import { setOnPacketComplete } from './pipeline.js'
+import { renormaliseSkills } from './skills.js'
 
 ensureDirs()
 openDb()
+// Skills stored before the vocabulary existed, or under an older list, take the list's names.
+const renamed = renormaliseSkills()
+if (renamed) console.log(`[skills] ${renamed} stored skill name${renamed === 1 ? '' : 's'} folded onto the vocabulary`)
 setOnPacketComplete(onPacketComplete)
 
 const app = express()

@@ -18,6 +18,8 @@ import { broadcast } from './events.js'
 import { sideLabel } from './codes.js'
 import { parseRubric, type Assignment, type Packet, type Rubric, type Student } from '../shared/types.js'
 import { rubricText } from './analysis.js'
+import { canonicalSkill, saveSkillVocabulary, skillVocabulary, skillVocabularyText } from './skills.js'
+import { skillListForPrompt, type SkillDef } from '../shared/skills.js'
 
 export const DEFAULT_MODEL = 'claude-opus-5-5'
 export const DEFAULT_DOMAINS = ['Ideas and content', 'Organization', 'Language: grammar and vocabulary', 'Spelling and punctuation', 'Task completion']
@@ -41,6 +43,8 @@ export interface Settings {
   context: string
   /** The domains each packet is rated on, 1 to 4. */
   domains: string[]
+  /** The skill vocabulary as Settings text: # Group lines, then "name | alias, alias" lines. */
+  skills: string
 }
 
 export function getSettings(): Settings {
@@ -52,10 +56,12 @@ export function getSettings(): Settings {
     auto: getMeta('autoAnalyse') === '1',
     context: getMeta('teacherContext') ?? '',
     domains: domainList(),
+    skills: skillVocabularyText(),
   }
 }
-export function saveSettings(s: { apiKey?: string | null; model?: string; auto?: boolean; context?: string; domains?: string[] }) {
+export function saveSettings(s: { apiKey?: string | null; model?: string; auto?: boolean; context?: string; domains?: string[]; skills?: string }) {
   if (s.domains !== undefined) setMeta('domains', s.domains.map((d) => d.trim()).filter(Boolean).join('\n'))
+  if (s.skills !== undefined) saveSkillVocabulary(s.skills)
   if (s.apiKey !== undefined) setMeta('anthropicApiKey', s.apiKey?.trim() ?? '')
   if (s.model !== undefined) setMeta('model', s.model.trim() || DEFAULT_MODEL)
   if (s.auto !== undefined) setMeta('autoAnalyse', s.auto ? '1' : '0')
@@ -77,8 +83,9 @@ const PacketResult = z.object({
   feedback: z.string().describe('A note the student reads themselves, pitched at their grade. 3 to 5 short sentences, warm and specific: one thing they did well, quoting their own words, and one thing to try next time. First name only. No scores.'),
   score: z.number().nullable().describe('A score for the work if it can be scored (right answers, a rubric level); null when it cannot.'),
   scoreOf: z.number().nullable().describe('What the score is out of; null when no score.'),
+  // The skill names are an enum built per request from the vocabulary; see packetSchema.
   skills: z.array(z.object({
-    name: z.string().describe('A short skill name a teacher would use: "short vowels", "capital at sentence start", "past tense", "using evidence".'),
+    name: z.string(),
     level: Level,
     evidence: z.string().describe('One phrase from the page that shows it.'),
   })).describe('The 3 to 7 skills this work gives evidence for.'),
@@ -91,14 +98,20 @@ const PacketResult = z.object({
 })
 export type PacketResultT = z.infer<typeof PacketResult> & { domains: Array<{ domain: string; level: number; note: string }>; criteria: Array<{ criterion: string; met: boolean; evidence: string }> }
 
-// The domains and criteria are the teacher's own, so the schema is built per request.
-function packetSchema(domains: string[], rubric: Rubric) {
+// The domains, criteria and skill names are the teacher's own, so the schema is built per request.
+function packetSchema(domains: string[], rubric: Rubric, skills: SkillDef[]) {
+  const skillNames = skills.map((s) => s.name) as [string, ...string[]]
   const criteria = rubric.criteria.length
     ? z.array(z.object({ criterion: z.enum(rubric.criteria as [string, ...string[]]), met: z.boolean(), evidence: z.string().describe('What on the page shows it, or what is missing.') })).describe('Every criterion in the list, in order.')
     : rubric.propose
       ? z.array(z.object({ criterion: z.string().describe('A success criterion the worksheet itself asks for, in a few words.'), met: z.boolean(), evidence: z.string() })).describe('3 to 5 criteria worked out from what the worksheet asks for, the same ones for every student.')
       : z.array(z.object({ criterion: z.string(), met: z.boolean(), evidence: z.string() })).max(0).describe('Empty: no criteria for this task.')
   return PacketResult.extend({
+    skills: z.array(z.object({
+      name: z.enum(skillNames).describe('A name from the skill list, exactly as written there. Pick the closest; never invent a name.'),
+      level: Level,
+      evidence: z.string().describe('One phrase from the page that shows it.'),
+    })).describe('The 3 to 7 skills this work gives the clearest evidence for, from the skill list. The ones in the teacher\'s focus first, when the page shows them.'),
     criteria,
     domains: domains.length
       ? z.array(z.object({
@@ -121,7 +134,7 @@ async function pageImage(file: string): Promise<Anthropic.ImageBlockParam> {
   return { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: buf.toString('base64') } }
 }
 
-function system(a: Assignment, rubric: Rubric, domains: string[]): string {
+function system(a: Assignment, rubric: Rubric, domains: string[], skills: SkillDef[] = skillVocabulary()): string {
   const ctx = getMeta('teacherContext')?.trim()
   return [
     'You read scanned worksheets from an elementary English class in Korea (students learning English) and write what each one shows, for the teacher and for the student.',
@@ -129,6 +142,7 @@ function system(a: Assignment, rubric: Rubric, domains: string[]): string {
     'The teacher\'s note is professional and brief. The student\'s note is specific and addresses the child by first name; it names one real strength with their own words quoted, and one thing to try next time; it never carries a score, mark or level.',
     `This assignment: "${a.title}" (${a.code}), ${a.klass}${a.grade != null ? `, grade ${a.grade}` : ''}${a.tags ? `, on ${a.tags}` : ''}. ${a.sheets} sheet${a.sheets === 1 ? '' : 's'}${a.twoSided ? ', both sides' : ''}.${a.notes ? ` Notes: ${a.notes}` : ''}`,
     rubricText(rubric, a.grade, domains),
+    `Skills are named only from this list, so the same skill has the same name on every assignment and a child's progress can be followed (group: names):\n${skillListForPrompt(skills)}`,
     ctx ? `About the class and how the teacher works: ${ctx}` : '',
   ].filter(Boolean).join('\n\n')
 }
@@ -154,11 +168,12 @@ export async function analysePacket(student: string, assignment: string): Promis
   content.push({ type: 'text', text: `These are ${first}'s pages (code ${s.code}${s.grade != null ? `, grade ${s.grade}` : ''}), in order. The English name in brackets, if any, is what the child goes by in class; use it in the feedback. Write the teacher's notes, the student's note, a score if the work can be scored, and the skills shown.` })
   const rubric = parseRubric(a.rubric)
   const domains = domainsFor(rubric)
+  const skills = skillVocabulary()
   const res = await client().messages.parse({
     model: getMeta('model') ?? DEFAULT_MODEL,
     max_tokens: 16000,
-    output_config: { effort: 'high', format: zodOutputFormat(packetSchema(domains, rubric)) },
-    system: system(a, rubric, domains),
+    output_config: { effort: 'high', format: zodOutputFormat(packetSchema(domains, rubric, skills)) },
+    system: system(a, rubric, domains, skills),
     messages: [{ role: 'user', content }],
   })
   if (res.stop_reason === 'refusal') throw new Error(`Claude declined to read this packet${res.stop_details?.explanation ? `: ${res.stop_details.explanation}` : ''}`)
@@ -169,7 +184,7 @@ export async function analysePacket(student: string, assignment: string): Promis
   setPacketFeedback(student, assignment, out.feedback)
   setPacketCorrections(student, assignment, out.corrections.slice(0, Math.min(rubric.fixitMax, (a.grade ?? s.grade ?? 3) <= 2 ? 3 : 6)))
   setPacketCriteria(student, assignment, out.criteria.map((c) => ({ ...c, evidence: c.evidence || null })))
-  replaceSkills(student, assignment, out.skills.map((k) => ({ ...k, at: pk.lastAt })))
+  replaceSkills(student, assignment, out.skills.map((k) => ({ ...k, name: canonicalSkill(k.name).name, at: pk.lastAt })))
   replaceDomains(student, assignment, out.domains, pk.lastAt)
   markAnalysed(student, assignment)
   broadcast('packet', getPacket(student, assignment))
