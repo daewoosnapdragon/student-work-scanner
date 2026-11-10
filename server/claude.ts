@@ -11,12 +11,13 @@ import { z } from 'zod'
 import sharp from 'sharp'
 import {
   getAssignment, getMeta, getPacket, getStudent, packetPages, packetsForAssignment, setAssignmentAnalysis, setMeta,
-  setPacketFeedback, setPacketScore, replaceSkills, markAnalysed, replaceDomains, setPacketCorrections, setPacketCriteria,
+  setPacketFeedback, setPacketScore, replaceSkills, markAnalysed, replaceDomains, setPacketCorrections, setPacketCriteria, setPacketProgress,
 } from './db.js'
+import { historyText, latestLevels, studentHistory } from './history.js'
 import { abs } from './pipeline.js'
 import { broadcast } from './events.js'
 import { sideLabel } from './codes.js'
-import { parseRubric, type Assignment, type Packet, type Rubric, type Student } from '../shared/types.js'
+import { parseProgress, parseRubric, SKILL_LEVEL_LABEL, type Assignment, type Packet, type Rubric, type Student } from '../shared/types.js'
 import { rubricText } from './analysis.js'
 import { canonicalSkill, saveSkillVocabulary, skillVocabulary, skillVocabularyText } from './skills.js'
 import { skillListForPrompt, type SkillDef } from '../shared/skills.js'
@@ -90,6 +91,9 @@ const PacketResult = z.object({
     evidence: z.string().describe('One phrase from the page that shows it.'),
   })).describe('The 3 to 7 skills this work gives evidence for.'),
   incomplete: z.boolean().describe('True when a side is blank or the work stops partway.'),
+  // The skill names here are an enum per request too; see packetSchema.
+  progress: z.array(z.object({ skill: z.string(), from: Level.nullable(), to: Level, note: z.string() })),
+  followedUp: z.string().nullable().describe('Whether the child did what their last note asked them to try next time: one sentence, quoting this page. Null when no earlier note was given, or the page gives no evidence either way.'),
   corrections: z.array(z.object({
     wrote: z.string().describe("Exactly what the student wrote, copied from the page, a few words at most."),
     better: z.string().describe('The corrected words.'),
@@ -112,6 +116,12 @@ function packetSchema(domains: string[], rubric: Rubric, skills: SkillDef[]) {
       level: Level,
       evidence: z.string().describe('One phrase from the page that shows it.'),
     })).describe('The 3 to 7 skills this work gives the clearest evidence for, from the skill list. The ones in the teacher\'s focus first, when the page shows them.'),
+    progress: z.array(z.object({
+      skill: z.enum(skillNames).describe('A skill from the earlier work, by its name in the list.'),
+      from: Level.nullable().describe('Its level in the most recent earlier work that recorded it; null if the earlier work never recorded this skill.'),
+      to: Level.describe('Its level on these pages.'),
+      note: z.string().describe('One phrase from these pages that shows the level now; say "held" or "slipped" or "moved up" in a word or two first.'),
+    })).describe('Every skill from the earlier work that these pages give evidence on, whether it moved or held. Empty when no earlier work was given, or nothing it recorded shows here. Never report movement the page does not show.'),
     criteria,
     domains: domains.length
       ? z.array(z.object({
@@ -143,6 +153,7 @@ function system(a: Assignment, rubric: Rubric, domains: string[], skills: SkillD
     `This assignment: "${a.title}" (${a.code}), ${a.klass}${a.grade != null ? `, grade ${a.grade}` : ''}${a.tags ? `, on ${a.tags}` : ''}. ${a.sheets} sheet${a.sheets === 1 ? '' : 's'}${a.twoSided ? ', both sides' : ''}.${a.notes ? ` Notes: ${a.notes}` : ''}`,
     rubricText(rubric, a.grade, domains),
     `Skills are named only from this list, so the same skill has the same name on every assignment and a child's progress can be followed (group: names):\n${skillListForPrompt(skills)}`,
+    'When earlier work by the same child is given: read the new pages on their own first and judge them as they are; only then compare. The earlier work says where to look, not what to find. If a skill the child was weak on has clearly moved up, the note to the student opens with that, naming the exact thing they did, before anything else, and the teacher\'s note says what moved and what did not. If the last note asked the child to try something, say whether they did. Never claim progress the pages do not show.',
     ctx ? `About the class and how the teacher works: ${ctx}` : '',
   ].filter(Boolean).join('\n\n')
 }
@@ -165,7 +176,11 @@ export async function analysePacket(student: string, assignment: string): Promis
     content.push({ type: 'text', text: `${sideLabel(p.page ?? 1, p.side ?? 'a')}:` })
     content.push(await pageImage(abs(p.filePath)))
   }
-  content.push({ type: 'text', text: `These are ${first}'s pages (code ${s.code}${s.grade != null ? `, grade ${s.grade}` : ''}), in order. The English name in brackets, if any, is what the child goes by in class; use it in the feedback. Write the teacher's notes, the student's note, a score if the work can be scored, and the skills shown.` })
+  const history = studentHistory(student, assignment)
+  const firstName = (/\(([^)]+)\)\s*$/.exec(s.name)?.[1] ?? s.name.split(/\s+/)[0]).trim()
+  const past = historyText(history, firstName)
+  content.push({ type: 'text', text: `These are ${first}'s pages (code ${s.code}${s.grade != null ? `, grade ${s.grade}` : ''}), in order. The English name in brackets, if any, is what the child goes by in class; use it in the feedback. Write the teacher's notes, the student's note, a score if the work can be scored, and the skills shown.${past ? ' Then, against the earlier work below, say which of its skills these pages show and where each stands now.' : ' This is the first work of theirs on record, so there is no earlier work to compare with.'}` })
+  if (past) content.push({ type: 'text', text: past })
   const rubric = parseRubric(a.rubric)
   const domains = domainsFor(rubric)
   const skills = skillVocabulary()
@@ -185,6 +200,12 @@ export async function analysePacket(student: string, assignment: string): Promis
   setPacketCorrections(student, assignment, out.corrections.slice(0, Math.min(rubric.fixitMax, (a.grade ?? s.grade ?? 3) <= 2 ? 3 : 6)))
   setPacketCriteria(student, assignment, out.criteria.map((c) => ({ ...c, evidence: c.evidence || null })))
   replaceSkills(student, assignment, out.skills.map((k) => ({ ...k, name: canonicalSkill(k.name).name, at: pk.lastAt })))
+  // The earlier level comes from our own records when Claude leaves it null but we have one.
+  const was = latestLevels(history)
+  setPacketProgress(student, assignment, history.length ? {
+    items: out.progress.map((i) => { const name = canonicalSkill(i.skill).name; return { skill: name, from: i.from ?? was.get(name) ?? null, to: i.to, note: i.note || null } }),
+    followedUp: out.followedUp,
+  } : null)
   replaceDomains(student, assignment, out.domains, pk.lastAt)
   markAnalysed(student, assignment)
   broadcast('packet', getPacket(student, assignment))
@@ -198,7 +219,10 @@ export async function analyseClass(assignment: string): Promise<z.infer<typeof C
   if (!packets.length) throw new Error('no analysed packets yet')
   const lines = packets.map((p) => {
     const s = getStudent(p.student)
-    return `### ${s?.name ?? p.student} (${p.student})${p.score != null ? ` · ${p.score}/${p.scoreOf ?? '?'}` : ''}\n${p.note}`
+    const pr = parseProgress(p.progress)
+    const moved = pr?.items.filter((i) => i.from && i.from !== i.to).map((i) => `${i.skill} ${SKILL_LEVEL_LABEL[i.from!]} → ${SKILL_LEVEL_LABEL[i.to]}`) ?? []
+    const extra = [moved.length ? `Since earlier work: ${moved.join('; ')}.` : '', pr?.followedUp ? `Follow-up: ${pr.followedUp}` : ''].filter(Boolean).join(' ')
+    return `### ${s?.name ?? p.student} (${p.student})${p.score != null ? ` · ${p.score}/${p.scoreOf ?? '?'}` : ''}\n${p.note}${extra ? `\n${extra}` : ''}`
   })
   const rubric = parseRubric(a.rubric)
   const res = await client().messages.parse({
@@ -206,7 +230,7 @@ export async function analyseClass(assignment: string): Promise<z.infer<typeof C
     max_tokens: 16000,
     output_config: { effort: 'medium', format: zodOutputFormat(ClassResult) },
     system: system(a, rubric, domainsFor(rubric)),
-    messages: [{ role: 'user', content: `Here are the teacher's notes on each student's work, from reading the pages. Write what the whole class shows and what to teach next, and name one student worth noticing.\n\n${lines.join('\n\n')}` }],
+    messages: [{ role: 'user', content: `Here are the teacher's notes on each student's work, from reading the pages, with what moved since their earlier work where there is any. Write what the whole class shows and what to teach next, and name one student worth noticing: a jump or a slip since earlier work counts for a lot.\n\n${lines.join('\n\n')}` }],
   })
   if (res.stop_reason === 'refusal') throw new Error('Claude declined to summarise this class')
   const out = res.parsed_output

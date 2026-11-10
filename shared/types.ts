@@ -81,6 +81,33 @@ export interface Packet {
   corrections: string | null
   /** The rubric's criteria checked for this student, as JSON: [{ criterion, met, evidence }]. */
   criteria: string | null
+  /** What moved since the student's earlier work, as JSON (see Progress). */
+  progress: string | null
+}
+
+export type SkillLevelName = 'secure' | 'developing' | 'not_yet'
+export const SKILL_LEVEL_LABEL: Record<SkillLevelName, string> = { secure: 'secure', developing: 'developing', not_yet: 'not yet' }
+/** One skill from the earlier work that this piece gives evidence on. */
+export interface ProgressItem { skill: string; from: SkillLevelName | null; to: SkillLevelName; note: string | null }
+export interface Progress {
+  items: ProgressItem[]
+  /** Whether the child did what their last note asked them to try, in a sentence; null when there was nothing to follow up. */
+  followedUp: string | null
+}
+const LEVEL_RANK: Record<SkillLevelName, number> = { not_yet: 0, developing: 1, secure: 2 }
+/** +1 moved up, -1 moved down, 0 held, null when there was no earlier reading. */
+export function progressDirection(i: ProgressItem): 1 | 0 | -1 | null {
+  if (!i.from) return null
+  return Math.sign(LEVEL_RANK[i.to] - LEVEL_RANK[i.from]) as 1 | 0 | -1
+}
+export function parseProgress(raw: string | null | undefined): Progress | null {
+  if (!raw) return null
+  try {
+    const v = JSON.parse(raw)
+    const items: ProgressItem[] = Array.isArray(v?.items) ? v.items.filter((i: any) => i && typeof i.skill === 'string' && i.to in LEVEL_RANK).map((i: any) => ({ skill: i.skill, from: i.from in LEVEL_RANK ? i.from : null, to: i.to, note: i.note ?? null })) : []
+    const followedUp = typeof v?.followedUp === 'string' && v.followedUp.trim() ? v.followedUp.trim() : null
+    return items.length || followedUp ? { items, followedUp } : null
+  } catch { return null }
 }
 
 /** What the analysis is asked to look for on one assignment. Kept on the assignment as JSON. */

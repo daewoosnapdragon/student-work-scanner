@@ -75,7 +75,7 @@ describe('splitting one student section into teacher and feedback parts', () => 
   })
   it('is all for the teacher when nothing marks a feedback part', () => {
     const r = splitStudentSection('Just notes.')
-    expect(r).toEqual({ teacher: 'Just notes.', feedback: null, domains: [], corrections: [], criteria: [], skills: [] })
+    expect(r).toEqual({ teacher: 'Just notes.', feedback: null, domains: [], corrections: [], criteria: [], skills: [], progress: null })
   })
   it('keeps the prompt asking for both parts', () => {
     const p = classPrompt({ code: 'W04', title: 'T', klass: 'K', grade: 4, tags: '' }, [{ code: '4S18', name: 'Lee Yoona', pages: 3 }])
@@ -214,10 +214,45 @@ Nice work, Minji.
     const p = classPrompt({ code: 'W23', title: 'My Weekend', klass: 'Daisy', grade: 3, tags: '' }, [{ code: '3D07', name: 'Kim Minji', pages: 2 }], [], DEFAULT_RUBRIC, DEFAULT_SKILLS)
     expect(p).toContain('Sentences and grammar: complete sentences; subject-verb agreement;')
     expect(p).toContain('### Skills')
-    expect(p).toMatch(/"### Fix-it" and "### Skills" inside each/)
+    expect(p).toMatch(/"### Fix-it", "### Skills" inside each/)
   })
   it('without a vocabulary the prompt asks for no skills', () => {
     const p = classPrompt({ code: 'W23', title: 'My Weekend', klass: 'Daisy', grade: 3, tags: '' }, [{ code: '3D07', name: 'Kim Minji', pages: 2 }], [], DEFAULT_RUBRIC)
     expect(p).not.toContain('### Skills')
+  })
+})
+
+describe('progress in a pasted answer', () => {
+  it('reads a Progress section: earlier level, level now, note, and the follow-up line', () => {
+    const parts = splitStudentSection(`### Teacher
+Moving.
+### Progress
+- Subject verb agreement: not yet → developing — "she goes" three times, "he like" once
+- past tense: developing — held
+- plurals: secure (held) — "two cats"
+- followed up: Yes, every verb after "did" is plain this time.
+`, [], DEFAULT_SKILLS)
+    expect(parts.teacher).toBe('Moving.')
+    expect(parts.progress).toEqual({
+      items: [
+        { skill: 'subject-verb agreement', from: 'not_yet', to: 'developing', note: '"she goes" three times, "he like" once' },
+        { skill: 'past tense', from: null, to: 'developing', note: 'held' },
+        { skill: 'plurals', from: null, to: 'secure', note: 'held: two cats' },
+      ],
+      followedUp: 'Yes, every verb after "did" is plain this time.',
+    })
+  })
+  it('has no progress when the section is missing', () => {
+    expect(splitStudentSection('Just notes.').progress).toBeNull()
+  })
+  it('the copied prompt carries each student\'s earlier work and asks for Progress only then', () => {
+    const students = [{ code: '3D07', name: 'Kim Minji', pages: 2, history: 'Earlier work by Minji, newest first.\n- past tense: not yet (W21, 3 Oct)' }, { code: '3D08', name: 'Lee Juno', pages: 2 }]
+    const p = classPrompt({ code: 'W23', title: 'My Weekend', klass: 'Daisy', grade: 3, tags: '' }, students, [], DEFAULT_RUBRIC, DEFAULT_SKILLS)
+    expect(p).toContain('### Progress')
+    expect(p).toMatch(/Progress, only for a student whose earlier work is given below/)
+    expect(p).toContain('Earlier work, per student:\n\n## 3D07 Kim Minji\nEarlier work by Minji')
+    expect(p).not.toContain('## 3D08 Lee Juno\nEarlier')
+    const none = classPrompt({ code: 'W23', title: 'My Weekend', klass: 'Daisy', grade: 3, tags: '' }, students.map((s) => ({ ...s, history: undefined })), [], DEFAULT_RUBRIC, DEFAULT_SKILLS)
+    expect(none).not.toContain('### Progress')
   })
 })

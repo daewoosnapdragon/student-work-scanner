@@ -3,12 +3,12 @@
 // code (a heading, a bold label, or just the code and a name); whatever
 // comes before the first code, or under a heading that says Class, is the
 // class's own section.
-import { parseCorrectionLines, type Correction, type CriterionResult, type Rubric } from '../shared/types.js'
+import { parseCorrectionLines, type Correction, type CriterionResult, type Progress, type ProgressItem, type Rubric } from '../shared/types.js'
 import { canonicalSkillName, skillListForPrompt, type SkillDef } from '../shared/skills.js'
 
 export type SkillLevel = 'secure' | 'developing' | 'not_yet'
 export interface SkillPart { name: string; level: SkillLevel; evidence: string | null; known: boolean }
-export interface StudentParts { teacher: string | null; feedback: string | null; domains: Array<{ domain: string; level: number; note: string | null }>; corrections: Correction[]; criteria: CriterionResult[]; skills: SkillPart[] }
+export interface StudentParts { teacher: string | null; feedback: string | null; domains: Array<{ domain: string; level: number; note: string | null }>; corrections: Correction[]; criteria: CriterionResult[]; skills: SkillPart[]; progress: Progress | null }
 
 // A domain line: "- Ideas and content: 3 — uses the frame well" (the dash, colon and note optional).
 const DOMAIN_LINE = /^[-*•]?\s*(?:\*\*)?([^:*]{3,60}?)(?:\*\*)?\s*:(?:\*\*)?\s*(?:\*\*)?\s*([1-4])(?:\s*\/\s*4)?(?:\*\*)?\s*(?:[—–-]|:)?\s*(.*)$/
@@ -26,8 +26,21 @@ const SKILLS_LINE = /^(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:skills|skills shown|skills
 // "- past tense: developing — 'she goed'" or "- capital letters: secure"
 const SKILL_ITEM = /^[-*•]?\s*(.+?)\s*:\s*(secure|strong|developing|emerging|not yet|not_yet|beginning)\b\.?\s*(?:[—–-]\s*(.+))?$/i
 const SKILL_LEVEL: Record<string, SkillLevel> = { secure: 'secure', strong: 'secure', developing: 'developing', emerging: 'developing', 'not yet': 'not_yet', not_yet: 'not_yet', beginning: 'not_yet' }
+const PROGRESS_LINE = /^(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:progress|since last time|since earlier work|what moved)\s*:?\s*(?:\*\*|__)?\s*:?\s*$/i
+// "- past tense: developing → secure — every verb right" or "- articles: new → developing — ..." or "- plurals: secure (held)"
+const LEVEL_WORDS = 'secure|strong|developing|emerging|not yet|not_yet|beginning|new|none|first time|—|-'
+const PROGRESS_ITEM = new RegExp(`^[-*•]?\\s*(.+?)\\s*:\\s*(?:(${LEVEL_WORDS})\\s*(?:→|->|=>|⇒|to)\\s*)?(secure|strong|developing|emerging|not yet|not_yet|beginning)\\b\\.?\\s*(?:\\((held|moved up|slipped|same)\\))?\\s*(?:[—–-]\\s*(.+))?$`, 'i')
+const FOLLOWED_UP = /^[-*•]?\s*(?:\*\*|__)?\s*(?:followed up|follow-up|follow up|last time's try|did they try it)\s*:?\s*(?:\*\*|__)?\s*:?\s*(.*)$/i
 // "- a sign-off: met — 'Bye, future me'" or "- a wish for future me: not yet"
 const CRITERION_ITEM = /^[-*•]?\s*(?:\[([ xX✓✔])\]\s*)?(.+?)\s*:\s*(met|yes|done|✓|✔|not yet|no|missing|✗|×|partly|partial)\b\.?\s*(?:[—–-]\s*(.+))?$/i
+
+// Quotes around a whole phrase come off; quotes inside it stay.
+function unquote(s: string | undefined): string | undefined {
+  const t = s?.trim()
+  if (!t) return t
+  const m = /^["“](.*)["”]$/.exec(t)
+  return m ? m[1].trim() : t
+}
 
 export function splitStudentSection(body: string, domainNames: string[] = [], skillDefs: SkillDef[] = []): StudentParts {
   const lines = body.split('\n')
@@ -37,7 +50,9 @@ export function splitStudentSection(body: string, domainNames: string[] = [], sk
   const fixit: string[] = []
   const criteria: CriterionResult[] = []
   const skills: SkillPart[] = []
-  let into: 'teacher' | 'feedback' | 'domains' | 'fixit' | 'criteria' | 'skills' = 'teacher'
+  const progress: ProgressItem[] = []
+  let followedUp: string | null = null
+  let into: 'teacher' | 'feedback' | 'domains' | 'fixit' | 'criteria' | 'skills' | 'progress' = 'teacher'
   const known = domainNames.map((d) => d.toLowerCase())
   const matchDomain = (name: string): string | null => {
     const n = name.trim().toLowerCase().replace(/[*_]/g, '')
@@ -50,12 +65,25 @@ export function splitStudentSection(body: string, domainNames: string[] = [], sk
     if (FIXIT_LINE.test(line)) { into = 'fixit'; continue }
     if (CRITERIA_LINE.test(line)) { into = 'criteria'; continue }
     if (SKILLS_LINE.test(line)) { into = 'skills'; continue }
+    if (PROGRESS_LINE.test(line)) { into = 'progress'; continue }
     if (into === 'fixit') { if (line) fixit.push(line); continue }
+    if (into === 'progress') {
+      const plain = line.replace(/\*\*|__/g, '')
+      const fu = FOLLOWED_UP.exec(plain)
+      if (fu) { followedUp = fu[1].trim() || null; continue }
+      const m = PROGRESS_ITEM.exec(plain)
+      if (m) {
+        const { name } = canonicalSkillName(m[1], skillDefs)
+        const from = m[2] ? SKILL_LEVEL[m[2].toLowerCase()] ?? null : null
+        if (name && !progress.some((i) => i.skill === name)) progress.push({ skill: name, from, to: SKILL_LEVEL[m[3].toLowerCase()], note: [m[4], unquote(m[5])].filter(Boolean).join(': ') || null })
+      }
+      continue
+    }
     if (into === 'skills') {
       const m = SKILL_ITEM.exec(line.replace(/\*\*|__/g, ''))
       if (m) {
         const { name, known } = canonicalSkillName(m[1], skillDefs)
-        if (name && !skills.some((k) => k.name === name)) skills.push({ name, level: SKILL_LEVEL[m[2].toLowerCase()], evidence: m[3]?.trim().replace(/^["“]|["”]$/g, '') || null, known })
+        if (name && !skills.some((k) => k.name === name)) skills.push({ name, level: SKILL_LEVEL[m[2].toLowerCase()], evidence: unquote(m[3]) || null, known })
       }
       continue
     }
@@ -77,7 +105,7 @@ export function splitStudentSection(body: string, domainNames: string[] = [], sk
     ;(into === 'teacher' ? teacher : feedback).push(raw)
   }
   const t = teacher.join('\n').trim(), f = feedback.join('\n').trim()
-  return { teacher: t || null, feedback: f || null, domains, corrections: parseCorrectionLines(fixit.join('\n')), criteria, skills }
+  return { teacher: t || null, feedback: f || null, domains, corrections: parseCorrectionLines(fixit.join('\n')), criteria, skills, progress: progress.length || followedUp ? { items: progress, followedUp } : null }
 }
 
 /** The rubric as instructions, shared by the in-app analysis and the copied prompt. */
@@ -138,10 +166,12 @@ export function splitClassAnswer(text: string, codes: string[]): { byStudent: Ma
 // The prompt to paste into Claude beside the class PDF: the assignment, the
 // students in the PDF's order, and the shape the answer should take so it
 // can be pasted straight back.
-export function classPrompt(a: { code: string; title: string; klass: string; grade: number | null; tags: string }, students: Array<{ code: string; name: string; pages: number }>, domains: string[] = [], rubric?: Rubric, skills: SkillDef[] = []): string {
+export function classPrompt(a: { code: string; title: string; klass: string; grade: number | null; tags: string }, students: Array<{ code: string; name: string; pages: number; history?: string }>, domains: string[] = [], rubric?: Rubric, skills: SkillDef[] = []): string {
   const used = rubric?.domains && rubric.domains.length ? domains.filter((d) => rubric.domains!.includes(d)) : domains
   const fixitN = used.length ? 5 : 4
   const skillsN = fixitN + 1
+  const withHistory = students.filter((s) => s.history)
+  const progressN = skillsN + 1
   const lines = [
     `Attached is a PDF of scanned student work: "${a.title}" (${a.code}), ${a.klass}${a.grade != null ? ` grade ${a.grade}` : ''}${a.tags ? `, on ${a.tags}` : ''}. Each page has a header with the student's name and code; one student's pages follow each other.`,
     '',
@@ -157,6 +187,7 @@ export function classPrompt(a: { code: string; title: string; klass: string; gra
     ...(used.length ? [`4. Ratings, 1 to 4 (4 strong, 3 secure, 2 developing, 1 beginning) against what this grade can be expected to do, one line each with a short reason, for exactly these domains: ${used.join('; ')}.`] : []),
     `${fixitN}. A fix-it table for the student: the mistakes most worth fixing, only ones actually on the page, most important first, at most ${rubric?.fixitMax ?? (a.grade != null && a.grade <= 2 ? 3 : 6)}. Each line: exactly what they wrote → the corrected words — the rule in one short sentence a child understands.`,
     ...(skills.length ? [`${skillsN}. Skills: the 3 to 7 skills the work gives the clearest evidence for, each "- skill: secure", "developing" or "not yet", with one phrase from the page after a dash. Use only these names, exactly as written, so the same skill is tracked across assignments:`, skillListForPrompt(skills)] : []),
+    ...(withHistory.length ? [`${progressN}. Progress, only for a student whose earlier work is given below: every skill from that earlier work the pages show, as "- skill: earlier level → level now — a phrase from the page", and a "- followed up: …" line saying whether they did what their last note asked. Read the pages on their own first; the earlier work says where to look, not what to find. If a skill the child was weak on has clearly moved up, their note opens with that.`] : []),
     '',
     'Format the answer exactly like this, so it can be filed by code:',
     '',
@@ -172,11 +203,13 @@ export function classPrompt(a: { code: string; title: string; klass: string; gra
     '- did you became → did you become — after "did", the verb stays plain',
     '- were do you live → where do you live — "where" asks about a place',
     ...(skills.length ? ['### Skills', `- ${skills[0].name}: developing — (a phrase from the page)`, `- ${skills[Math.min(1, skills.length - 1)].name}: secure — (a phrase from the page)`] : []),
+    ...(withHistory.length ? ['### Progress', `- ${skills[0]?.name ?? 'past tense'}: not yet → developing — (a phrase from the page)`, '- followed up: (did they try what the last note asked?)'] : []),
     '',
     '## Class',
     '(what the whole class shows: shared strengths, the common gaps, and what to teach next)',
     '',
-    `Use one "## CODE Name" heading per student, every student, in the order above, with "### Teacher", "### Feedback", "### Criteria"${used.length ? ', "### Domains"' : ''}, "### Fix-it"${skills.length ? ' and "### Skills"' : ''} inside each, and the "## Class" heading last.`,
+    `Use one "## CODE Name" heading per student, every student, in the order above, with "### Teacher", "### Feedback", "### Criteria"${used.length ? ', "### Domains"' : ''}, "### Fix-it"${skills.length ? ', "### Skills"' : ''}${withHistory.length ? ' and, where there is earlier work, "### Progress"' : ''} inside each, and the "## Class" heading last.`,
+    ...(withHistory.length ? ['', '---', 'Earlier work, per student:', ...withHistory.flatMap((s) => ['', `## ${s.code} ${s.name}`, s.history!])] : []),
   ]
   return lines.join('\n')
 }

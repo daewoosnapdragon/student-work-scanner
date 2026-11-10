@@ -14,10 +14,11 @@ import { abs, fileFromReview, reorderPacket, skipAllInReview, skipFromReview, st
 import { buildPdf } from '../pdf.js'
 import { classPrompt, splitClassAnswer, splitStudentSection } from '../analysis.js'
 import { enqueueAssignment, enqueueClass, enqueuePacket, getSettings, queueStatus, saveSettings, testKey, domainList, domainsFor, LEVELS } from '../claude.js'
-import { skillsForStudent, skillsForAssignment, domainsForAssignment, domainsForStudent, replaceDomains, replaceSkills, setPacketCorrections, setPacketCriteria, setAssignmentRubric } from '../db.js'
+import { skillsForStudent, skillsForAssignment, domainsForAssignment, domainsForStudent, replaceDomains, replaceSkills, setPacketCorrections, setPacketCriteria, setPacketProgress, setAssignmentRubric } from '../db.js'
 import { canonicalSkill, skillVocabulary } from '../skills.js'
+import { historyText, latestLevels, studentHistory } from '../history.js'
 import { skillGroups } from '../../shared/skills.js'
-import { parseCorrectionLines, parseCorrections, parseCriteria, parseRubric, DEFAULT_RUBRIC, type Rubric } from '../../shared/types.js'
+import { parseCorrectionLines, parseCorrections, parseCriteria, parseProgress, parseRubric, progressDirection, DEFAULT_RUBRIC, SKILL_LEVEL_LABEL, type Rubric } from '../../shared/types.js'
 import { watcherStatus } from '../watcher.js'
 import { formatCode, sideLabel } from '../codes.js'
 import type { Assignment, ReviewItem, Side, Student } from '../../shared/types.js'
@@ -225,6 +226,10 @@ api.post('/assignments/:code/analysis/paste', (req, res) => {
     setPacketScore(student, code, pk.score, pk.scoreOf, parts.teacher ?? body)
     if (parts.feedback) { setPacketFeedback(student, code, parts.feedback); withFeedback++ }
     if (parts.skills.length) replaceSkills(student, code, parts.skills.map((k) => ({ name: k.name, level: k.level, evidence: k.evidence ?? '', at: pk.lastAt })))
+    if (parts.progress) {
+      const was = latestLevels(studentHistory(student, code))
+      setPacketProgress(student, code, { items: parts.progress.items.map((i) => ({ ...i, from: i.from ?? was.get(i.skill) ?? null })), followedUp: parts.progress.followedUp })
+    }
     if (parts.domains.length) replaceDomains(student, code, parts.domains, pk.lastAt)
     if (parts.corrections.length) setPacketCorrections(student, code, parts.corrections)
     if (parts.criteria.length) setPacketCriteria(student, code, parts.criteria)
@@ -238,7 +243,12 @@ api.get('/assignments/:code/prompt', (req, res) => {
   const code = req.params.code.toUpperCase()
   const a = getAssignment(code)
   if (!a) return res.status(404).json({ error: 'no such assignment' })
-  const students = packetsForAssignment(code).map((p) => ({ code: p.student, name: getStudent(p.student)?.name ?? p.student, pages: packetPages(p.student, code).length })).sort((x, y) => x.name.localeCompare(y.name))
+  const students = packetsForAssignment(code).map((p) => {
+    const s = getStudent(p.student)
+    const name = s?.name ?? p.student
+    const first = (/\(([^)]+)\)\s*$/.exec(name)?.[1] ?? name.split(/\s+/)[0]).trim()
+    return { code: p.student, name, pages: packetPages(p.student, code).length, history: historyText(studentHistory(p.student, code), first) || undefined }
+  }).sort((x, y) => x.name.localeCompare(y.name))
   const rubric = parseRubric(a.rubric)
   res.type('text').send(classPrompt(a, students, domainsFor(rubric), rubric, skillVocabulary()))
 })
@@ -590,6 +600,7 @@ ${rows.map(({ p, s }) => `<tr><td><b>${esc(s?.name ?? p.student)}</b>${s?.nameKo
     return `<section class="rec"><h2>${esc(s?.name ?? p.student)} <span class="muted">${esc(p.student)}${p.score != null ? ` · ${p.score}${p.scoreOf != null ? ` of ${p.scoreOf}` : ''}` : ''}</span></h2>
     ${rs.length ? `<div class="chips">${rs.map((r) => `<span class="chip lv${r.level}"><b>${esc(short(r.domain))}</b> ${r.level} ${esc(LEVELS[r.level] ?? '')}${r.note ? ` · ${esc(r.note)}` : ''}</span>`).join('')}</div>` : ''}
     ${parseCriteria(p.criteria).length ? `<ul class="crit">${parseCriteria(p.criteria).map((c) => `<li class="${c.met ? 'met' : 'not'}"><span>${c.met ? '✓' : '✗'}</span> ${esc(c.criterion)}${c.evidence ? ` <i>· ${esc(c.evidence)}</i>` : ''}</li>`).join('')}</ul>` : ''}
+    ${progressHtml(p.progress)}
     <div class="two">${p.note ? `<div><div class="over">For the teacher</div>${p.note.split(/\n{2,}/).map((x) => `<p>${esc(x).replace(/\n/g, '<br>')}</p>`).join('')}</div>` : ''}${p.feedback ? `<div><div class="over">To the student</div>${p.feedback.split(/\n{2,}/).map((x) => `<p>${esc(x).replace(/\n/g, '<br>')}</p>`).join('')}</div>` : ''}</div></section>`
   })
   res.type('html').send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Record · ${esc(a.code)}</title>
@@ -614,6 +625,7 @@ tfoot td{border-top:2px solid #d9d0c1;border-bottom:0;font-weight:600}
 .chips{display:flex;flex-wrap:wrap;gap:1.5mm;margin-bottom:3mm}.chip{font-size:8.5pt;padding:.6mm 2mm;border-radius:2px;border:1px solid #e6ddcf}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:6mm}.two p{margin:0 0 1.5mm;line-height:1.45}
 .crit{list-style:none;margin:0 0 3mm;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:1mm 6mm;font-size:9pt}.crit li span{display:inline-block;width:4mm;font-weight:700}.crit .met span{color:#2f7d4f}.crit .not span{color:#8b1e1e}.crit i{color:#6b6259}
+.prog{display:flex;flex-wrap:wrap;gap:1.5mm;align-items:baseline;margin-bottom:3mm;font-size:9pt}.prog .over{margin:0 2mm 0 0}.prog .dir1{background:#dff0e5}.prog .dir-1{background:#f8dcd8}.prog i{color:#6b6259;flex-basis:100%}
 .bar{position:fixed;top:0;left:0;right:0;background:#1f1b17;color:#fff;padding:8px 14px;font-size:13px;display:flex;gap:14px;align-items:center;z-index:9}
 .bar button{font:inherit;background:#8b1e1e;color:#fff;border:0;border-radius:3px;padding:5px 12px;cursor:pointer}
 @media print{.bar{display:none}}
@@ -632,6 +644,15 @@ print.get('/code/:student/:assignment/:page/:side.svg', async (req, res) => {
   const code = formatCode({ student: student.toUpperCase(), assignment: assignment.toUpperCase(), page: Number(page), side: side.toLowerCase() as Side })
   res.type('image/svg+xml').send(await QRCode.toString(code, { type: 'svg', margin: 1, errorCorrectionLevel: 'H' }))
 })
+
+/** "Since last time" for the printed record: moved-up skills first, then the follow-up. */
+function progressHtml(raw: string | null): string {
+  const pr = parseProgress(raw)
+  if (!pr) return ''
+  const glyph = (d: ReturnType<typeof progressDirection>) => (d === 1 ? '↑' : d === -1 ? '↓' : d === 0 ? '→' : '·')
+  const items = [...pr.items].sort((a, b) => (progressDirection(b) ?? -2) - (progressDirection(a) ?? -2))
+  return `<div class="prog"><span class="over">Since last time</span>${items.map((i) => `<span class="chip dir${progressDirection(i) ?? 'n'}">${esc(i.skill)} <b>${i.from ? `${esc(SKILL_LEVEL_LABEL[i.from])} ${glyph(progressDirection(i))} ` : ''}${esc(SKILL_LEVEL_LABEL[i.to])}</b></span>`).join('')}${pr.followedUp ? `<i>${esc(pr.followedUp)}</i>` : ''}</div>`
+}
 
 function fixitTable(rows: Array<{ wrote: string; better: string; why: string | null }>, young: boolean): string {
   if (!rows.length) return ''

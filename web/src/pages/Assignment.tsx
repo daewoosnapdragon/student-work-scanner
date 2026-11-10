@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { post, useFetch, fmtDate, fileUrl, sideLabel, type Assignment, type Packet, type Page, type Student } from '../api'
 import { parseCorrectionLines, parseCorrections, parseCriteria, type Rubric } from '../../../shared/types'
+import ProgressRow from '../components/ProgressRow'
 
 interface Row extends Student { packet: Packet | null; pages: Page[] }
 interface Rating { student: string; assignment: string; domain: string; level: number; note: string | null }
@@ -240,6 +241,7 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings }: {
           {parseCriteria(p.criteria).map((c) => <span key={c.criterion} className="chip" title={c.evidence ?? ''} style={{ background: c.met ? '#dff0e5' : '#f8dcd8' }}><b style={{ color: c.met ? 'var(--green)' : 'var(--accent)' }}>{c.met ? '✓' : '✗'}</b> {c.criterion}</span>)}
         </div>
       )}
+      <ProgressRow raw={p.progress} />
       <div className="row" style={{ gap: 6 }}>
         <span className="over quiet" style={{ fontSize: 10, marginRight: 4 }}>Domains</span>
         {domains.map((d) => {

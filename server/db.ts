@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import fs from 'node:fs'
 import path from 'node:path'
 import { DB_PATH } from './config.js'
-import type { Assignment, Packet, Page, Side, Student } from '../shared/types.js'
+import type { Assignment, Packet, Page, Progress, Side, Student } from '../shared/types.js'
 import { expectedSides } from './codes.js'
 
 let db: DatabaseSync
@@ -111,6 +111,7 @@ function migrate(d: DatabaseSync) {
   if (!pcols.includes('analysedAt')) d.exec('ALTER TABLE packets ADD COLUMN analysedAt TEXT')
   if (!pcols.includes('corrections')) d.exec('ALTER TABLE packets ADD COLUMN corrections TEXT')
   if (!pcols.includes('criteria')) d.exec('ALTER TABLE packets ADD COLUMN criteria TEXT')
+  if (!pcols.includes('progress')) d.exec('ALTER TABLE packets ADD COLUMN progress TEXT')
 }
 
 // ---------- students ----------
@@ -159,6 +160,9 @@ export function setAssignmentRubric(code: string, rubric: string | null) {
 }
 export function setPacketCriteria(student: string, assignment: string, criteria: Array<{ criterion: string; met: boolean; evidence: string | null }> | null) {
   getDb().prepare('UPDATE packets SET criteria = ? WHERE student = ? AND assignment = ?').run(criteria && criteria.length ? JSON.stringify(criteria) : null, student, assignment)
+}
+export function setPacketProgress(student: string, assignment: string, progress: Progress | null) {
+  getDb().prepare('UPDATE packets SET progress = ? WHERE student = ? AND assignment = ?').run(progress && (progress.items.length || progress.followedUp) ? JSON.stringify(progress) : null, student, assignment)
 }
 export function setAssignmentAnalysis(code: string, analysis: string | null) {
   getDb().prepare('UPDATE assignments SET analysis = ? WHERE code = ?').run(analysis, code)

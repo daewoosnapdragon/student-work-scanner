@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useFetch, fmtDate, fileUrl, sideLabel, type Assignment, type Packet, type Page, type Student } from '../api'
+import ProgressRow from '../components/ProgressRow'
 
 interface PacketRow extends Packet { assignmentInfo: Assignment | null; pages: Page[] }
 interface Skill { student: string; assignment: string; name: string; level: 'secure' | 'developing' | 'not_yet'; evidence: string | null; at: string }
@@ -97,6 +98,7 @@ function PacketRows({ p, ratings, open, toggle }: { p: PacketRow; ratings: Ratin
               </a>
             ))}
           </div>
+          {p.progress && <div style={{ marginTop: 12 }}><ProgressRow raw={p.progress} compact /></div>}
           {(p.note || p.feedback) && (
             <div className="grid2" style={{ marginTop: 12, gap: 24 }}>
               {p.note && <div><div className="over quiet" style={{ fontSize: 10, marginBottom: 4 }}>Analysis · for you</div><p className="small" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{p.note}</p></div>}
