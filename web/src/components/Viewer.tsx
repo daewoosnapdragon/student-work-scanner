@@ -17,6 +17,8 @@ export interface ViewerPage {
   panel?: ReactNode
 }
 
+const PAIR_GAP = 12
+
 interface ViewerApi { open: (pages: ViewerPage[], index?: number) => void }
 const Ctx = createContext<ViewerApi>({ open: () => {} })
 export const useViewer = () => useContext(Ctx)
@@ -79,16 +81,17 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
   const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null)
   const dragged = useRef(false)
 
-  // The stage's size, kept current as the window changes.
+  // The size one picture has to fit in: the stage, or half of it less the gap when two sit side by side.
+  const paired = !!page.pair
   useLayoutEffect(() => {
     const el = stageRef.current
     if (!el) return
-    const measure = () => setStage({ w: el.clientWidth, h: el.clientHeight })
+    const measure = () => setStage({ w: paired ? (el.clientWidth - PAIR_GAP) / 2 : el.clientWidth, h: el.clientHeight })
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [panel, page.pair])
+  }, [panel, paired])
 
   // A new page starts fitted and upright.
   useEffect(() => { setImg(null); setRotate(0); setFitted(true) }, [page.src])
@@ -149,7 +152,10 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
 
   function stagePoint(e: { clientX: number; clientY: number }) {
     const r = stageRef.current!.getBoundingClientRect()
-    return { x: e.clientX - r.left, y: e.clientY - r.top }
+    let x = e.clientX - r.left
+    // Over the right-hand partner, measure from that pane's own left edge: the two share one view.
+    if (paired && x > stage.w + PAIR_GAP / 2) x -= stage.w + PAIR_GAP
+    return { x, y: e.clientY - r.top }
   }
   function onWheel(e: RWheelEvent) {
     e.preventDefault()
@@ -230,7 +236,7 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
       <div className="viewer-body">
         <div ref={stageRef} className="viewer-stage" data-backdrop="1" onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onDoubleClick={onDoubleClick} onClick={onBackdropClick} style={{ cursor: fitted ? 'zoom-in' : 'grab' }}>
           {page.pair ? (
-            <div style={{ position: 'absolute', inset: 0, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, padding: 0 }}>
+            <div style={{ position: 'absolute', inset: 0, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: PAIR_GAP, padding: 0 }}>
               <Pane src={page.src} view={view} rotate={rotate} img={img} vis={vis} onSize={setImg} />
               <Pane src={page.pair.src} view={view} rotate={rotate} img={img} vis={vis} onSize={null} />
             </div>
