@@ -10,8 +10,9 @@ import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import { z } from 'zod'
 import {
   getAssignment, getMeta, getPacket, getStudent, packetPages, packetsForAssignment, setAssignmentAnalysis, setMeta,
-  setPacketFeedback, setPacketScore, replaceSkills, markAnalysed, replaceDomains, setPacketCorrections, setPacketCriteria, setPacketProgress,
+  setPacketFeedback, setPacketNote, setClaudeScore, replaceSkills, markAnalysed, replaceDomains, setPacketCorrections, setPacketCriteria, setPacketProgress,
 } from './db.js'
+import { calibrationText } from './agreement.js'
 import { historyText, latestLevels, studentHistory } from './history.js'
 import { annotationsForPage, anchorsForAssignment, domainsForAssignment } from './db.js'
 import { annotationsText, pageJpeg } from './marks.js'
@@ -155,6 +156,7 @@ function system(a: Assignment, rubric: Rubric, domains: string[], skills: SkillD
     `This assignment: "${a.title}" (${a.code}), ${a.klass}${a.grade != null ? `, grade ${a.grade}` : ''}${a.tags ? `, on ${a.tags}` : ''}. ${a.sheets} sheet${a.sheets === 1 ? '' : 's'}${a.twoSided ? ', both sides' : ''}.${a.notes ? ` Notes: ${a.notes}` : ''}`,
     rubricText(rubric, a.grade, domains),
     anchors.length ? anchorsText(anchors, rubric) + ' The anchor packets\' pages come first in the message, each under a line naming its score; the packet to assess comes after them.' : '',
+    calibrationText(a.code),
     `Skills are named only from this list, so the same skill has the same name on every assignment and a child's progress can be followed (group: names):\n${skillListForPrompt(skills)}`,
     'Where the teacher has marked a page, the marks are listed after it and drawn on it as thin numbered boxes; they are the teacher\'s, not the child\'s work, and they are the ground truth. A "fix" mark names a mistake that goes in the fix-it table before anything you found yourself, in the teacher\'s terms. A "praise" mark names a strength the student\'s note quotes. A "note" is context to use, and a question in one is for you to answer in the teacher\'s note.',
     'When earlier work by the same child is given: read the new pages on their own first and judge them as they are; only then compare. The earlier work says where to look, not what to find. If a skill the child was weak on has clearly moved up, the note to the student opens with that, naming the exact thing they did, before anything else, and the teacher\'s note says what moved and what did not. If the last note asked the child to try something, say whether they did. Never claim progress the pages do not show.',
@@ -228,7 +230,8 @@ export async function analysePacket(student: string, assignment: string): Promis
   const out = res.parsed_output
   if (!out) throw new Error('Claude answered in a shape that could not be read; try again')
   const scored = rubric.scoring === 'none' ? { score: null, scoreOf: null } : rubric.scoring === 'outOf' && rubric.scoreOf ? { score: out.score, scoreOf: rubric.scoreOf } : { score: out.score, scoreOf: out.score == null ? null : 4 }
-  setPacketScore(student, assignment, scored.score, scored.scoreOf, out.teacher)
+  setPacketNote(student, assignment, out.teacher)
+  setClaudeScore(student, assignment, scored.score, scored.scoreOf)
   setPacketFeedback(student, assignment, out.feedback)
   setPacketCorrections(student, assignment, out.corrections.slice(0, Math.min(rubric.fixitMax, (a.grade ?? s.grade ?? 3) <= 2 ? 3 : 6)))
   setPacketCriteria(student, assignment, out.criteria.map((c) => ({ ...c, evidence: c.evidence || null })))
@@ -239,7 +242,7 @@ export async function analysePacket(student: string, assignment: string): Promis
     items: out.progress.map((i) => { const name = canonicalSkill(i.skill).name; return { skill: name, from: i.from ?? was.get(name) ?? null, to: i.to, note: i.note || null } }),
     followedUp: out.followedUp,
   } : null)
-  replaceDomains(student, assignment, out.domains, pk.lastAt)
+  replaceDomains(student, assignment, out.domains, pk.lastAt, 'claude')
   markAnalysed(student, assignment)
   broadcast('packet', getPacket(student, assignment))
   return out

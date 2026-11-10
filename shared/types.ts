@@ -85,7 +85,15 @@ export interface Packet {
   criteria: string | null
   /** What moved since the student's earlier work, as JSON (see Progress). */
   progress: string | null
+  /** Claude's score for the packet, kept even when the teacher's own score is the one shown. */
+  claudeScore: number | null
+  /** Who gave the score shown: Claude, or the teacher by hand (which a re-analysis never overwrites). */
+  scoreBy: 'claude' | 'teacher' | null
 }
+
+export type RatedBy = 'claude' | 'teacher'
+/** One domain rating as the API returns it, with Claude's level kept beside the teacher's when both exist. */
+export interface DomainRating { student: string; assignment: string; domain: string; level: number; note: string | null; at: string; claudeLevel: number | null; by: RatedBy | null }
 
 /** A packet the teacher has scored by hand to show what a score looks like on this assignment; Claude scores the rest against them. */
 export interface Anchor {

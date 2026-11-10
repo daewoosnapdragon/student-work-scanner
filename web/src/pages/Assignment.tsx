@@ -5,10 +5,11 @@ import { parseCorrectionLines, parseCorrections, parseCriteria, type Anchor, typ
 import { del, put } from '../api'
 import ProgressRow from '../components/ProgressRow'
 import { ScanLink, type ViewerPage } from '../components/Viewer'
+import AgreementCard, { type Agreement } from '../components/AgreementCard'
 
 interface Row extends Student { packet: Packet | null; pages: Page[] }
-interface Rating { student: string; assignment: string; domain: string; level: number; note: string | null }
-interface Data { assignment: Assignment; expected: number; students: Row[]; inReview: number; average: number | null; scoredCount: number; noticing: { text: string; at: string } | null; analysisOn: boolean; domains: string[]; allDomains: string[]; rubric: Rubric; ratings: Rating[]; anchors: Anchor[] }
+interface Rating { student: string; assignment: string; domain: string; level: number; note: string | null; claudeLevel: number | null; by: 'claude' | 'teacher' | null }
+interface Data { assignment: Assignment; expected: number; students: Row[]; inReview: number; average: number | null; scoredCount: number; noticing: { text: string; at: string } | null; analysisOn: boolean; domains: string[]; allDomains: string[]; rubric: Rubric; ratings: Rating[]; anchors: Anchor[]; agreement: Agreement }
 const LEVEL_NAME: Record<number, string> = { 4: 'Strong', 3: 'Secure', 2: 'Developing', 1: 'Beginning' }
 const LEVEL_BG: Record<number, string> = { 4: '#dff0e5', 3: '#eef5e9', 2: '#fff3d6', 1: '#f8dcd8' }
 const shortDomain = (d: string) => d.split(':')[0].trim()
@@ -147,6 +148,16 @@ export default function AssignmentPage() {
         <PacketPanel key={`${selected.code}:${selected.packet.analysedAt ?? ''}:${data.ratings.filter((r) => r.student === selected.code).map((r) => r.level).join('')}`} s={selected} a={a} onSaved={() => setBump((b) => b + 1)} analysisOn={data.analysisOn} busyJob={active.some((j) => j.student === selected.code)} domains={data.domains} ratings={data.ratings.filter((r) => r.student === selected.code)} anchor={data.anchors.find((an) => an.student === selected.code) ?? null} rubric={data.rubric} />
       )}
 
+      {(data.agreement.score || data.agreement.domains.length > 0) && (
+        <section className="col" style={{ gap: 10 }}>
+          <div className="between">
+            <div className="over">Agreement with your ratings</div>
+            <div className="muted small">{data.agreement.compared} packet{data.agreement.compared === 1 ? '' : 's'} rated by both you and Claude</div>
+          </div>
+          <AgreementCard ag={data.agreement} />
+        </section>
+      )}
+
       <section className="grid2 sep">
         <div className="col" style={{ gap: 10 }}>
           <div className="over">What the class shows</div>
@@ -197,6 +208,7 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings, anc
     }
   }
   const [score, setScore] = useState(p.score != null ? String(p.score) : '')
+  const [scoreTouched, setScoreTouched] = useState(false)
   const [of, setOf] = useState(p.scoreOf != null ? String(p.scoreOf) : '10')
   const [note, setNote] = useState(p.note ?? '')
   const [feedback, setFeedback] = useState(p.feedback ?? '')
@@ -235,7 +247,7 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings, anc
   async function save() {
     try {
       setErr(null)
-      await post(`/api/packets/${a.code}/${s.code}/score`, { score: score === '' ? null : Number(score), scoreOf: of === '' ? null : Number(of), note: note || null, feedback, corrections: fixit })
+      await post(`/api/packets/${a.code}/${s.code}/score`, { score: score === '' ? null : Number(score), scoreOf: of === '' ? null : Number(of), note: note || null, feedback, corrections: fixit, scoreTouched })
       setSaved(true)
       onSaved()
     } catch (e) {
@@ -296,14 +308,15 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings, anc
               <select value={levels[d] ?? ''} onChange={(e) => setLevels({ ...levels, [d]: Number(e.target.value) })} style={{ padding: '1px 4px', height: 'auto' }}><option value="">·</option>{[4, 3, 2, 1].map((l) => <option key={l} value={l}>{l} {LEVEL_NAME[l]}</option>)}</select>
             </label>
           ) : (
-            <span key={d} className="chip" title={r?.note ?? 'not rated'} style={{ background: r ? LEVEL_BG[r.level] : undefined }}>{shortDomain(d)} <b>{r ? r.level : '·'}</b></span>
+            <span key={d} className="chip" title={`${r?.note ?? 'not rated'}${r?.by === 'teacher' ? ` · your rating${r.claudeLevel != null ? `; Claude gave ${r.claudeLevel}` : ''}` : r ? ' · Claude\'s rating' : ''}`} style={{ background: r ? LEVEL_BG[r.level] : undefined, borderColor: r?.by === 'teacher' ? 'var(--ink2)' : undefined }}>{shortDomain(d)} <b>{r ? r.level : '·'}</b>{r?.by === 'teacher' && r.claudeLevel != null && r.claudeLevel !== r.level && <span className="muted"> vs {r.claudeLevel}</span>}</span>
           )
         })}
-        {editLevels ? <><button className="btn" onClick={() => void saveDomains()}>Save</button><button className="btn" onClick={() => setEditLevels(false)}>Cancel</button></> : <button className="btn" onClick={() => setEditLevels(true)}>{ratings.length ? 'Edit' : 'Rate'}</button>}
+        {editLevels ? <><button className="btn" onClick={() => void saveDomains()} title="Saving records these as your ratings; Claude's stay beside them for the agreement check">Save</button><button className="btn" onClick={() => setEditLevels(false)}>Cancel</button></> : <button className="btn" onClick={() => setEditLevels(true)} title={ratings.some((r) => r.by === 'teacher') ? 'Change your ratings' : 'Rate the domains yourself; the comparison with Claude shows on the assignment'}>{ratings.length ? 'Edit' : 'Rate'}</button>}
       </div>
       <form className="col" style={{ gap: 10 }} onSubmit={(e) => { e.preventDefault(); void save() }}>
         <div className="row" style={{ gap: 12 }}>
-          <label className="row"><span className="over quiet" style={{ fontSize: 10 }}>Score</span><input type="number" step="0.5" min={0} value={score} onChange={(e) => { setScore(e.target.value); setSaved(false) }} style={{ width: 70 }} /></label>
+          <label className="row"><span className="over quiet" style={{ fontSize: 10 }}>Score</span><input type="number" step="0.5" min={0} value={score} onChange={(e) => { setScore(e.target.value); setScoreTouched(true); setSaved(false) }} style={{ width: 70 }} title={p.scoreBy === 'teacher' ? `Your score${p.claudeScore != null ? `; Claude gave ${p.claudeScore}` : ''}` : p.scoreBy === 'claude' ? 'Claude\'s score. Type here to make it yours.' : undefined} /></label>
+          {p.scoreBy === 'teacher' && p.claudeScore != null && p.claudeScore !== p.score && <span className="muted small" title="Claude's score is kept beside yours for the agreement check">Claude gave {p.claudeScore}</span>}
           <label className="row"><span className="over quiet" style={{ fontSize: 10 }}>of</span><input type="number" step="1" min={1} value={of} onChange={(e) => { setOf(e.target.value); setSaved(false) }} style={{ width: 70 }} /></label>
           <button type="submit" className="btn primary" style={{ marginLeft: 'auto' }}>Save</button>
           {saved && <span className="muted small">Saved</span>}

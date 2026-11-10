@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { get, post } from '../api'
+import { get, post, useFetch } from '../api'
+import AgreementCard, { type Agreement } from '../components/AgreementCard'
 
 interface Settings { hasKey: boolean; keyHint: string | null; model: string; auto: boolean; context: string; domains: string[]; skills: string }
 
@@ -21,6 +22,7 @@ export default function SettingsPage() {
   const [skills, setSkills] = useState('')
   const [msg, setMsg] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
+  const { data: agreement } = useFetch<Agreement>('/api/agreement')
   useEffect(() => { get<Settings>('/api/settings').then((d) => { setS(d); setModel(d.model); setAuto(d.auto); setContext(d.context); setDomains(d.domains.join('\n')); setSkills(d.skills) }) }, [])
 
   async function save(extra: Partial<{ apiKey: string | null; skills: string }> = {}) {
@@ -95,6 +97,12 @@ export default function SettingsPage() {
           <button className="btn" onClick={() => { if (window.confirm('Put the default list back? Your edits to the skill names are lost; recorded skills are refiled under the default names.')) void save({ skills: '' }) }}>Reset to default</button>
           {msg && <span className="small">{msg}</span>}
         </div>
+      </section>
+
+      <section className="card" style={{ gap: 14, padding: 20 }}>
+        <div className="over quiet">How Claude's ratings compare with yours</div>
+        <p className="small" style={{ margin: 0 }}>Across every assignment, wherever you rated a packet's domains by hand or typed its score and Claude read the same packet. This is the one outside check on the analysis: it says how far to trust it, and where Claude leans it is told to correct next time.</p>
+        <AgreementCard ag={agreement} across hint="Nothing to compare yet. On an assignment, open a packet and Rate its domains or type a score; once Claude has read the same packet the comparison appears here." />
       </section>
 
       <section className="col" style={{ gap: 8 }}>

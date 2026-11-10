@@ -15,7 +15,8 @@ import { buildPdf } from '../pdf.js'
 import { classPrompt, splitClassAnswer, splitStudentSection } from '../analysis.js'
 import { enqueueAssignment, enqueueClass, enqueuePacket, getSettings, queueStatus, saveSettings, testKey, domainList, domainsFor, LEVELS, anchorsFor } from '../claude.js'
 import { skillsForStudent, skillsForAssignment, domainsForAssignment, domainsForStudent, replaceDomains, replaceSkills, setPacketCorrections, setPacketCriteria, setPacketProgress, setAssignmentRubric } from '../db.js'
-import { annotationsForPage, annotationsForPages, deleteAnnotation, getAnnotation, insertAnnotation, updateAnnotation, withAnnotationCounts, anchorsForAssignment, setAnchor, deleteAnchor } from '../db.js'
+import { annotationsForPage, annotationsForPages, deleteAnnotation, getAnnotation, insertAnnotation, updateAnnotation, withAnnotationCounts, anchorsForAssignment, setAnchor, deleteAnchor, setPacketNote } from '../db.js'
+import { agreementFor } from '../agreement.js'
 import { annotationsText, clampBox, isKind } from '../../shared/annotations.js'
 import { canonicalSkill, skillVocabulary } from '../skills.js'
 import { historyText, latestLevels, studentHistory } from '../history.js'
@@ -225,14 +226,14 @@ api.post('/assignments/:code/analysis/paste', (req, res) => {
     const pk = packets.find((p) => p.student === student)
     if (!pk) continue
     const parts = splitStudentSection(body, domainList(), skillVocabulary())
-    setPacketScore(student, code, pk.score, pk.scoreOf, parts.teacher ?? body)
+    setPacketNote(student, code, parts.teacher ?? body)
     if (parts.feedback) { setPacketFeedback(student, code, parts.feedback); withFeedback++ }
     if (parts.skills.length) replaceSkills(student, code, parts.skills.map((k) => ({ name: k.name, level: k.level, evidence: k.evidence ?? '', at: pk.lastAt })))
     if (parts.progress) {
       const was = latestLevels(studentHistory(student, code))
       setPacketProgress(student, code, { items: parts.progress.items.map((i) => ({ ...i, from: i.from ?? was.get(i.skill) ?? null })), followedUp: parts.progress.followedUp })
     }
-    if (parts.domains.length) replaceDomains(student, code, parts.domains, pk.lastAt)
+    if (parts.domains.length) replaceDomains(student, code, parts.domains, pk.lastAt, 'claude')
     if (parts.corrections.length) setPacketCorrections(student, code, parts.corrections)
     if (parts.criteria.length) setPacketCriteria(student, code, parts.criteria)
     filed.push(student)
@@ -335,8 +336,12 @@ api.get('/assignments/:code', (req, res) => {
   const average = scored.length ? scored.reduce((t, p) => t + (p.score ?? 0), 0) / scored.length : null
   const noticingRaw = getMeta(`noticing:${a.code}`)
   const rubric = parseRubric(a.rubric)
-  res.json({ assignment: a, expected: expectedFor(a), students, inReview, average, scoredCount: scored.length, noticing: noticingRaw ? JSON.parse(noticingRaw) : null, analysisOn: getSettings().hasKey, domains: domainsFor(rubric), allDomains: domainList(), rubric, ratings: domainsForAssignment(a.code), anchors: anchorsForAssignment(a.code) })
+  res.json({ assignment: a, expected: expectedFor(a), students, inReview, average, scoredCount: scored.length, noticing: noticingRaw ? JSON.parse(noticingRaw) : null, analysisOn: getSettings().hasKey, domains: domainsFor(rubric), allDomains: domainList(), rubric, ratings: domainsForAssignment(a.code), anchors: anchorsForAssignment(a.code), agreement: agreementFor(a.code) })
 })
+
+// How Claude's scores and ratings compare with the teacher's own, for one assignment or across them all.
+api.get('/agreement', (_req, res) => res.json(agreementFor()))
+api.get('/agreement/:assignment', (req, res) => res.json(agreementFor(req.params.assignment.toUpperCase())))
 
 // An anchor: the teacher's own score for a packet, which every other packet is then scored against.
 api.put('/packets/:assignment/:student/anchor', (req, res) => {
@@ -367,7 +372,10 @@ api.post('/packets/:assignment/:student/score', (req, res) => {
   const { assignment, student } = req.params
   if (!getPacket(student, assignment)) return res.status(404).json({ error: 'no such packet' })
   const b = req.body ?? {}
-  setPacketScore(student, assignment, b.score == null ? null : Number(b.score), b.scoreOf == null ? null : Number(b.scoreOf), b.note ?? null)
+  const pk = getPacket(student, assignment)!
+  // The score box typed in is the teacher's judgement, even when it agrees with Claude's. Left alone, the score and who gave it stand.
+  if (b.scoreTouched || pk.score == null || b.score == null) setPacketScore(student, assignment, b.score == null ? null : Number(b.score), b.scoreOf == null ? null : Number(b.scoreOf), b.note ?? null)
+  else setPacketNote(student, assignment, b.note ?? null)
   if (b.feedback !== undefined) setPacketFeedback(student, assignment, typeof b.feedback === 'string' && b.feedback.trim() ? b.feedback.trim() : null)
   if (b.corrections !== undefined) setPacketCorrections(student, assignment, typeof b.corrections === 'string' ? parseCorrectionLines(b.corrections) : Array.isArray(b.corrections) ? b.corrections : null)
   res.json(getPacket(student, assignment))
@@ -378,7 +386,7 @@ api.post('/packets/:assignment/:student/domains', (req, res) => {
   const pk = getPacket(student, assignment)
   if (!pk) return res.status(404).json({ error: 'no such packet' })
   const rows = Array.isArray(req.body?.domains) ? (req.body.domains as Array<{ domain: string; level: number; note?: string | null }>).filter((r) => r.domain && r.level) : []
-  replaceDomains(student, assignment, rows.map((r) => ({ domain: String(r.domain), level: Number(r.level), note: r.note ?? null })), pk.lastAt)
+  replaceDomains(student, assignment, rows.map((r) => ({ domain: String(r.domain), level: Number(r.level), note: r.note ?? null })), pk.lastAt, 'teacher')
   res.json(domainsForAssignment(assignment).filter((r) => r.student === student))
 })
 

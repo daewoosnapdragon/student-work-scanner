@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import fs from 'node:fs'
 import path from 'node:path'
 import { DB_PATH } from './config.js'
-import type { Anchor, Assignment, Packet, Page, Progress, Side, Student } from '../shared/types.js'
+import type { Anchor, Assignment, DomainRating, Packet, Page, Progress, RatedBy, Side, Student } from '../shared/types.js'
 import type { Annotation, AnnotationKind } from '../shared/annotations.js'
 import { expectedSides } from './codes.js'
 
@@ -134,6 +134,23 @@ function migrate(d: DatabaseSync) {
   if (!pcols.includes('corrections')) d.exec('ALTER TABLE packets ADD COLUMN corrections TEXT')
   if (!pcols.includes('criteria')) d.exec('ALTER TABLE packets ADD COLUMN criteria TEXT')
   if (!pcols.includes('progress')) d.exec('ALTER TABLE packets ADD COLUMN progress TEXT')
+  if (!pcols.includes('claudeScore')) d.exec('ALTER TABLE packets ADD COLUMN claudeScore REAL')
+  if (!pcols.includes('scoreBy')) {
+    d.exec('ALTER TABLE packets ADD COLUMN scoreBy TEXT')
+    // Scores from before this column: an analysed packet's is Claude's, any other the teacher's.
+    d.exec(`UPDATE packets SET scoreBy = CASE WHEN analysedAt IS NOT NULL THEN 'claude' ELSE 'teacher' END,
+      claudeScore = CASE WHEN analysedAt IS NOT NULL THEN score ELSE claudeScore END WHERE score IS NOT NULL`)
+  }
+  // An anchor's score is always the teacher's.
+  d.exec(`UPDATE packets SET scoreBy = 'teacher' WHERE score IS NOT NULL AND scoreBy IS NOT 'teacher'
+    AND EXISTS (SELECT 1 FROM anchors a WHERE a.assignment = packets.assignment AND a.student = packets.student)`)
+  const dcols = (d.prepare('PRAGMA table_info(domains)').all() as Array<{ name: string }>).map((c) => c.name)
+  if (!dcols.includes('claudeLevel')) d.exec('ALTER TABLE domains ADD COLUMN claudeLevel INTEGER')
+  if (!dcols.includes('by')) {
+    d.exec('ALTER TABLE domains ADD COLUMN by TEXT')
+    d.exec(`UPDATE domains SET by = CASE WHEN EXISTS (SELECT 1 FROM packets p WHERE p.student = domains.student AND p.assignment = domains.assignment AND p.analysedAt IS NOT NULL) THEN 'claude' ELSE 'teacher' END`)
+    d.exec(`UPDATE domains SET claudeLevel = level WHERE by = 'claude'`)
+  }
 }
 
 // ---------- students ----------
@@ -312,8 +329,19 @@ export function refreshPacket(student: string, assignment: string, at: string): 
 export function closePacketIncomplete(student: string, assignment: string) {
   getDb().prepare('UPDATE packets SET closedIncomplete = 1, complete = 1 WHERE student = ? AND assignment = ?').run(student, assignment)
 }
+/** The teacher's score, with the note: what the score form and an anchor set. A later analysis keeps it and records its own beside it. */
 export function setPacketScore(student: string, assignment: string, score: number | null, scoreOf: number | null, note: string | null) {
-  getDb().prepare('UPDATE packets SET score = ?, scoreOf = ?, note = ? WHERE student = ? AND assignment = ?').run(score, scoreOf, note, student, assignment)
+  getDb().prepare('UPDATE packets SET score = ?, scoreOf = ?, note = ?, scoreBy = ? WHERE student = ? AND assignment = ?').run(score, scoreOf, note, score == null ? null : 'teacher', student, assignment)
+}
+export function setPacketNote(student: string, assignment: string, note: string | null) {
+  getDb().prepare('UPDATE packets SET note = ? WHERE student = ? AND assignment = ?').run(note, student, assignment)
+}
+/** Claude's score: always kept in claudeScore; shown as the score unless the teacher has set their own. */
+export function setClaudeScore(student: string, assignment: string, score: number | null, scoreOf: number | null) {
+  const pk = getPacket(student, assignment)
+  if (!pk) return
+  if (pk.scoreBy === 'teacher') getDb().prepare('UPDATE packets SET claudeScore = ? WHERE student = ? AND assignment = ?').run(score, student, assignment)
+  else getDb().prepare('UPDATE packets SET claudeScore = ?, score = ?, scoreOf = ?, scoreBy = ? WHERE student = ? AND assignment = ?').run(score, score, scoreOf, score == null ? null : 'claude', student, assignment)
 }
 export function setPacketCorrections(student: string, assignment: string, corrections: Array<{ wrote: string; better: string; why: string | null }> | null) {
   getDb().prepare('UPDATE packets SET corrections = ? WHERE student = ? AND assignment = ?').run(corrections && corrections.length ? JSON.stringify(corrections) : null, student, assignment)
@@ -359,12 +387,37 @@ export function skillsForAssignment(assignment: string): SkillRow[] {
 }
 
 // ---------- domains: the rubric-like ratings, 1 to 4, per student per assignment ----------
-export interface DomainRow { student: string; assignment: string; domain: string; level: number; note: string | null; at: string }
-export function replaceDomains(student: string, assignment: string, rows: Array<{ domain: string; level: number; note: string | null }>, at: string) {
+export type DomainRow = DomainRating
+/**
+ * Writes a set of ratings. From Claude: every domain is replaced, but a domain
+ * the teacher rated by hand keeps the teacher's level and gets Claude's beside
+ * it. From the teacher: only the domains given change, each marked as theirs,
+ * and Claude's earlier level stays beside it for the comparison.
+ */
+export function replaceDomains(student: string, assignment: string, rows: Array<{ domain: string; level: number; note: string | null }>, at: string, by: RatedBy = 'claude') {
   const d = getDb()
-  d.prepare('DELETE FROM domains WHERE student = ? AND assignment = ?').run(student, assignment)
-  const ins = d.prepare('INSERT OR REPLACE INTO domains (student, assignment, domain, level, note, at) VALUES (?,?,?,?,?,?)')
-  for (const r of rows) ins.run(student, assignment, r.domain, Math.max(1, Math.min(4, Math.round(r.level))), r.note, at)
+  const before = new Map(domainsForPacket(student, assignment).map((r) => [r.domain, r]))
+  const clamp = (n: number) => Math.max(1, Math.min(4, Math.round(n)))
+  const ins = d.prepare('INSERT OR REPLACE INTO domains (student, assignment, domain, level, note, at, claudeLevel, by) VALUES (?,?,?,?,?,?,?,?)')
+  if (by === 'claude') {
+    d.prepare('DELETE FROM domains WHERE student = ? AND assignment = ?').run(student, assignment)
+    for (const r of rows) {
+      const prev = before.get(r.domain)
+      if (prev?.by === 'teacher') ins.run(student, assignment, r.domain, prev.level, prev.note, prev.at, clamp(r.level), 'teacher')
+      else ins.run(student, assignment, r.domain, clamp(r.level), r.note, at, clamp(r.level), 'claude')
+    }
+  } else {
+    for (const r of rows) {
+      const prev = before.get(r.domain)
+      ins.run(student, assignment, r.domain, clamp(r.level), r.note ?? prev?.note ?? null, at, prev?.claudeLevel ?? (prev && prev.by !== 'teacher' ? prev.level : null), 'teacher')
+    }
+  }
+}
+export function domainsForPacket(student: string, assignment: string): DomainRow[] {
+  return getDb().prepare('SELECT * FROM domains WHERE student = ? AND assignment = ? ORDER BY domain').all(student, assignment) as unknown as DomainRow[]
+}
+export function allDomains(): DomainRow[] {
+  return getDb().prepare('SELECT * FROM domains ORDER BY assignment, student, domain').all() as unknown as DomainRow[]
 }
 export function domainsForAssignment(assignment: string): DomainRow[] {
   return getDb().prepare('SELECT * FROM domains WHERE assignment = ? ORDER BY student, domain').all(assignment) as unknown as DomainRow[]
