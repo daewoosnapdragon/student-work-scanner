@@ -166,11 +166,12 @@ export function splitClassAnswer(text: string, codes: string[]): { byStudent: Ma
 // The prompt to paste into Claude beside the class PDF: the assignment, the
 // students in the PDF's order, and the shape the answer should take so it
 // can be pasted straight back.
-export function classPrompt(a: { code: string; title: string; klass: string; grade: number | null; tags: string }, students: Array<{ code: string; name: string; pages: number; history?: string }>, domains: string[] = [], rubric?: Rubric, skills: SkillDef[] = []): string {
+export function classPrompt(a: { code: string; title: string; klass: string; grade: number | null; tags: string }, students: Array<{ code: string; name: string; pages: number; history?: string; marks?: string }>, domains: string[] = [], rubric?: Rubric, skills: SkillDef[] = []): string {
   const used = rubric?.domains && rubric.domains.length ? domains.filter((d) => rubric.domains!.includes(d)) : domains
   const fixitN = used.length ? 5 : 4
   const skillsN = fixitN + 1
   const withHistory = students.filter((s) => s.history)
+  const withMarks = students.filter((s) => s.marks)
   const progressN = skillsN + 1
   const lines = [
     `Attached is a PDF of scanned student work: "${a.title}" (${a.code}), ${a.klass}${a.grade != null ? ` grade ${a.grade}` : ''}${a.tags ? `, on ${a.tags}` : ''}. Each page has a header with the student's name and code; one student's pages follow each other.`,
@@ -179,6 +180,7 @@ export function classPrompt(a: { code: string; title: string; klass: string; gra
     ...students.map((s) => `- ${s.code}  ${s.name}  (${s.pages} page${s.pages === 1 ? '' : 's'})`),
     '',
     ...(rubric ? [rubricText(rubric, a.grade, domains), ''] : []),
+    ...(withMarks.length ? ['Some pages carry the teacher\'s marks: thin numbered boxes drawn on the page, listed by number at the end of this prompt. They are the teacher\'s, not the child\'s work, and they are the ground truth: a "fix" mark goes first in that student\'s fix-it table, in the teacher\'s terms; a "praise" mark is quoted in their note; a "note" is context, and a question in one is answered in the teacher part.', ''] : []),
     'Please read every page and write, for each student:',
     '',
     '1. For the teacher: 3 to 6 sentences on what the work shows. What is secure, what is developing, one specific thing to teach or praise next. Quote or describe the actual writing where it helps.',
@@ -210,6 +212,7 @@ export function classPrompt(a: { code: string; title: string; klass: string; gra
     '',
     `Use one "## CODE Name" heading per student, every student, in the order above, with "### Teacher", "### Feedback", "### Criteria"${used.length ? ', "### Domains"' : ''}, "### Fix-it"${skills.length ? ', "### Skills"' : ''}${withHistory.length ? ' and, where there is earlier work, "### Progress"' : ''} inside each, and the "## Class" heading last.`,
     ...(withHistory.length ? ['', '---', 'Earlier work, per student:', ...withHistory.flatMap((s) => ['', `## ${s.code} ${s.name}`, s.history!])] : []),
+    ...(withMarks.length ? ['', '---', 'The teacher\'s marks, per student:', ...withMarks.flatMap((s) => ['', `## ${s.code} ${s.name}`, s.marks!])] : []),
   ]
   return lines.join('\n')
 }

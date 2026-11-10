@@ -8,13 +8,15 @@ import {
   setPacketScore, upsertAssignment, upsertStudent, closePacketIncomplete, getPage, getMeta, metaWithPrefix, sidesFor, deleteAssignment,
   refreshPacketsFor, setAssignmentAnalysis, setPacketFeedback,
 } from '../db.js'
-import { subscribe } from '../events.js'
+import { broadcast, subscribe } from '../events.js'
 import { guessesFor } from '../guesses.js'
 import { abs, fileFromReview, reorderPacket, skipAllInReview, skipFromReview, stalePackets, unfilePage } from '../pipeline.js'
 import { buildPdf } from '../pdf.js'
 import { classPrompt, splitClassAnswer, splitStudentSection } from '../analysis.js'
 import { enqueueAssignment, enqueueClass, enqueuePacket, getSettings, queueStatus, saveSettings, testKey, domainList, domainsFor, LEVELS } from '../claude.js'
 import { skillsForStudent, skillsForAssignment, domainsForAssignment, domainsForStudent, replaceDomains, replaceSkills, setPacketCorrections, setPacketCriteria, setPacketProgress, setAssignmentRubric } from '../db.js'
+import { annotationsForPage, annotationsForPages, deleteAnnotation, getAnnotation, insertAnnotation, updateAnnotation, withAnnotationCounts } from '../db.js'
+import { annotationsText, clampBox, isKind } from '../../shared/annotations.js'
 import { canonicalSkill, skillVocabulary } from '../skills.js'
 import { historyText, latestLevels, studentHistory } from '../history.js'
 import { skillGroups } from '../../shared/skills.js'
@@ -129,10 +131,10 @@ api.post('/students', (req, res) => {
 api.get('/students/:code', (req, res) => {
   const s = getStudent(req.params.code.toUpperCase())
   if (!s) return res.status(404).json({ error: 'no such student' })
-  const packets = packetsForStudent(s.code).map((p) => ({ ...p, assignmentInfo: getAssignment(p.assignment) ?? null, pages: packetPages(p.student, p.assignment) }))
+  const packets = packetsForStudent(s.code).map((p) => ({ ...p, assignmentInfo: getAssignment(p.assignment) ?? null, pages: withAnnotationCounts(packetPages(p.student, p.assignment)) }))
   const assigned = listAssignments().filter((a) => a.klass === s.klass && (a.grade == null || s.grade == null || a.grade === s.grade))
   const missing = assigned.filter((a) => !getPacket(s.code, a.code))
-  res.json({ student: s, packets, missing, pages: pagesForStudent(s.code), skills: skillsForStudent(s.code), ratings: domainsForStudent(s.code), domains: domainList(), skillGroups: Object.fromEntries(skillVocabulary().map((d) => [d.name, d.group])) })
+  res.json({ student: s, packets, missing, pages: withAnnotationCounts(pagesForStudent(s.code)), skills: skillsForStudent(s.code), ratings: domainsForStudent(s.code), domains: domainList(), skillGroups: Object.fromEntries(skillVocabulary().map((d) => [d.name, d.group])) })
 })
 
 // ---------- Assignments ----------
@@ -247,7 +249,9 @@ api.get('/assignments/:code/prompt', (req, res) => {
     const s = getStudent(p.student)
     const name = s?.name ?? p.student
     const first = (/\(([^)]+)\)\s*$/.exec(name)?.[1] ?? name.split(/\s+/)[0]).trim()
-    return { code: p.student, name, pages: packetPages(p.student, code).length, history: historyText(studentHistory(p.student, code), first) || undefined }
+    const pages = packetPages(p.student, code)
+    const marks = pages.map((pg) => annotationsText(annotationsForPage(pg.id), sideLabel(pg.page ?? 1, pg.side ?? 'a'))).filter(Boolean).join('\n\n')
+    return { code: p.student, name, pages: pages.length, history: historyText(studentHistory(p.student, code), first) || undefined, marks: marks || undefined }
   }).sort((x, y) => x.name.localeCompare(y.name))
   const rubric = parseRubric(a.rubric)
   res.type('text').send(classPrompt(a, students, domainsFor(rubric), rubric, skillVocabulary()))
@@ -324,7 +328,7 @@ api.get('/assignments/:code', (req, res) => {
   for (const code of packets.keys()) if (!roster.some((s) => s.code === code)) { const s = getStudent(code); if (s) roster.push(s) }
   const students = roster.map((s) => {
     const p = packets.get(s.code)
-    return { ...s, packet: p ?? null, pages: p ? packetPages(s.code, a.code) : [] }
+    return { ...s, packet: p ?? null, pages: p ? withAnnotationCounts(packetPages(s.code, a.code)) : [] }
   })
   const inReview = reviewPages().filter((p) => p.assignment === a.code).length
   const scored = [...packets.values()].filter((p) => p.score != null)
@@ -363,7 +367,7 @@ api.get('/compare', (req, res) => {
   const side = (code: string) => {
     const s = getStudent(code)
     if (!s) return null
-    return { student: s, packet: getPacket(code, assignment) ?? null, pages: packetPages(code, assignment) }
+    return { student: s, packet: getPacket(code, assignment) ?? null, pages: withAnnotationCounts(packetPages(code, assignment)) }
   }
   res.json({ assignment: a, sides: sidesFor(a), left: side(left), right: side(right) })
 })
@@ -445,6 +449,51 @@ api.post('/review/packet/:assignment/:student/close', (req, res) => {
   if (!getPacket(student, assignment)) return res.status(404).json({ error: 'no such packet' })
   closePacketIncomplete(student, assignment)
   res.json(getPacket(student, assignment))
+})
+
+// ---------- Annotations: the teacher's comments pinned to a spot on a page ----------
+// Boxes are fractions of the upright page: x, y the top-left corner, w, h the size, all 0 to 1.
+api.get('/pages/:id/annotations', (req, res) => {
+  const id = Number(req.params.id)
+  if (!getPage(id)) return res.status(404).json({ error: 'no such page' })
+  res.json(annotationsForPage(id))
+})
+api.get('/packets/:assignment/:student/annotations', (req, res) => {
+  const pages = packetPages(req.params.student.toUpperCase(), req.params.assignment.toUpperCase())
+  res.json(annotationsForPages(pages.map((p) => p.id)))
+})
+api.post('/pages/:id/annotations', (req, res) => {
+  const id = Number(req.params.id)
+  if (!getPage(id)) return res.status(404).json({ error: 'no such page' })
+  const b = req.body ?? {}
+  const text = String(b.text ?? '').trim()
+  if (!text) return res.status(400).json({ error: 'the comment needs some text' })
+  if (![b.x, b.y, b.w, b.h].every((n) => typeof n === 'number' && Number.isFinite(n))) return res.status(400).json({ error: 'x, y, w and h are needed, as fractions of the page' })
+  const box = clampBox({ x: b.x, y: b.y, w: b.w, h: b.h })
+  const a = insertAnnotation({ pageId: id, ...box, kind: isKind(b.kind) ? b.kind : 'note', text: text.slice(0, 2000) })
+  broadcast('page', { page: getPage(id), annotation: a })
+  res.json(a)
+})
+api.put('/annotations/:id', (req, res) => {
+  const id = Number(req.params.id)
+  const a = getAnnotation(id)
+  if (!a) return res.status(404).json({ error: 'no such comment' })
+  const b = req.body ?? {}
+  const patch: Record<string, unknown> = {}
+  if (b.text !== undefined) { const t = String(b.text).trim(); if (!t) return res.status(400).json({ error: 'the comment needs some text' }); patch.text = t.slice(0, 2000) }
+  if (b.kind !== undefined) { if (!isKind(b.kind)) return res.status(400).json({ error: 'kind is praise, fix or note' }); patch.kind = b.kind }
+  if ([b.x, b.y, b.w, b.h].some((n) => n !== undefined)) Object.assign(patch, clampBox({ x: b.x ?? a.x, y: b.y ?? a.y, w: b.w ?? a.w, h: b.h ?? a.h }))
+  const updated = updateAnnotation(id, patch)!
+  broadcast('page', { page: getPage(a.pageId), annotation: updated })
+  res.json(updated)
+})
+api.delete('/annotations/:id', (req, res) => {
+  const id = Number(req.params.id)
+  const a = getAnnotation(id)
+  if (!a) return res.status(404).json({ error: 'no such comment' })
+  deleteAnnotation(id)
+  broadcast('page', { page: getPage(a.pageId), removedAnnotation: id })
+  res.json({ ok: true })
 })
 
 // ---------- Settings and the analysis step ----------

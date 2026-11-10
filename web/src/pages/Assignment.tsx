@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { post, useFetch, fmtDate, fileUrl, sideLabel, type Assignment, type Packet, type Page, type Student } from '../api'
 import { parseCorrectionLines, parseCorrections, parseCriteria, type Rubric } from '../../../shared/types'
@@ -173,6 +173,8 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings }: {
   const [err, setErr] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [pages, setPages] = useState<Page[]>(s.pages)
+  // Kept for reordering by hand, but it follows the server whenever the page refetches (a comment added, a page sent back).
+  useEffect(() => setPages(s.pages), [s.pages])
   const [moving, setMoving] = useState(false)
   async function move(i: number, dir: -1 | 1) {
     const j = i + dir
@@ -217,7 +219,7 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings }: {
       {parseCorrections(p.corrections).length > 0 && <div><div className="over quiet" style={{ fontSize: 10, marginBottom: 4 }}>Fix-it</div>{parseCorrections(p.corrections).map((c, i) => <div key={i} className="small"><s style={{ color: 'var(--accent)' }}>{c.wrote}</s> <b style={{ color: 'var(--green)' }}>{c.better}</b>{c.why && <span className="muted"> · {c.why}</span>}</div>)}</div>}
     </>
   ) : undefined
-  const viewPages: ViewerPage[] = pages.map((pg) => ({ src: fileUrl(pg.filePath), label: `${s.name} · ${sideLabel(pg.page, pg.side)}`, sub: `${a.code} · ${a.title}`, panel }))
+  const viewPages: ViewerPage[] = pages.map((pg) => ({ src: fileUrl(pg.filePath), label: `${s.name} · ${sideLabel(pg.page, pg.side)}`, sub: `${a.code} · ${a.title}`, pageId: pg.id, panel }))
   return (
     <section className="card" style={{ padding: 20, gap: 14 }}>
       <div className="between">
@@ -232,7 +234,7 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings }: {
       <div className="thumbs" style={{ opacity: moving ? 0.6 : 1 }}>
         {pages.map((pg, i) => (
           <div key={pg.id} className="thumb">
-            <ScanLink pages={viewPages} index={i}><img src={fileUrl(pg.thumbPath ?? pg.filePath)} alt={sideLabel(pg.page, pg.side)} /></ScanLink>
+            <ScanLink pages={viewPages} index={i} badge={pg.annotations}><img src={fileUrl(pg.thumbPath ?? pg.filePath)} alt={sideLabel(pg.page, pg.side)} /></ScanLink>
             <span className="between" style={{ gap: 4 }}>
               <span>{sideLabel(pg.page, pg.side)}</span>
               <span className="row" style={{ gap: 2 }}>

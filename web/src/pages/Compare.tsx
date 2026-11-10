@@ -31,10 +31,10 @@ export default function Compare() {
     const find = (d: SideData | null) => d?.pages.find((p) => p.page === sd.page && p.side === sd.side)
     const l = find(data.left), r = find(data.right)
     const lab = sideLabel(sd.page, sd.side)
-    if (l && r) return [{ src: fileUrl(l.filePath), label: `${data.left!.student.name} · ${lab}`, sub: `${a!.code} · ${a!.title}`, pair: { src: fileUrl(r.filePath), label: data.right!.student.name } }]
+    if (l && r) return [{ src: fileUrl(l.filePath), label: `${data.left!.student.name} · ${lab}`, sub: `${a!.code} · ${a!.title}`, pageId: l.id, pair: { src: fileUrl(r.filePath), label: data.right!.student.name } }]
     const one = l ?? r
     const who = l ? data.left! : data.right
-    return one && who ? [{ src: fileUrl(one.filePath), label: `${who.student.name} · ${lab}`, sub: `${a!.code} · ${a!.title} · only ${who.student.name} has this side` }] : []
+    return one && who ? [{ src: fileUrl(one.filePath), label: `${who.student.name} · ${lab}`, sub: `${a!.code} · ${a!.title} · only ${who.student.name} has this side`, pageId: one.id }] : []
   }) : []
   const openSide = (sd: { page: number; side: 'a' | 'b' }) => {
     const i = viewPages.findIndex((v) => v.label.endsWith(`· ${sideLabel(sd.page, sd.side)}`))

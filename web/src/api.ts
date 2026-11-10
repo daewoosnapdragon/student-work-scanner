@@ -15,6 +15,13 @@ export async function post<T>(url: string, body: unknown): Promise<T> {
   return data
 }
 
+export async function put<T>(url: string, body: unknown): Promise<T> {
+  const r = await fetch(url, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  const data = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(data.error ?? r.statusText)
+  return data
+}
+
 export async function del<T>(url: string): Promise<T> {
   const r = await fetch(url, { method: 'DELETE' })
   const data = await r.json().catch(() => ({}))

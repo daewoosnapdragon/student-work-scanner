@@ -132,7 +132,7 @@ export default function Review() {
             </div>
             {page ? (
               <div style={{ overflow: 'auto', maxHeight: zoom ? 'none' : 720 }}>
-                <button type="button" className="scanlink" onClick={() => openViewer([{ src: fileUrl(page.filePath), label: page.sourceName, sub: item.problem }])} title="Open large. Wheel to zoom, drag to move, Esc to close." style={{ width: zoom ? '160%' : '100%' }}>
+                <button type="button" className="scanlink" onClick={() => openViewer([{ src: fileUrl(page.filePath), label: page.sourceName, sub: item.problem, pageId: page.id }])} title="Open large. Wheel to zoom, drag to move, Esc to close." style={{ width: zoom ? '160%' : '100%' }}>
                   <img className="scan" src={fileUrl(page.filePath)} alt="Page in review" style={{ transform: `rotate(${rotate}deg)` }} />
                 </button>
               </div>
@@ -144,7 +144,7 @@ export default function Review() {
                 <span className="muted small">{page.decoded ? `Code read: ${page.decoded}` : 'No code could be read on the page.'}</span>
                 <button className="btn" style={{ marginLeft: 'auto' }} onClick={() => setRotate((r) => (r + 90) % 360)}>Rotate</button>
                 <button className="btn" onClick={() => setZoom((z) => !z)}>{zoom ? 'Fit' : 'Zoom'}</button>
-                <button className="btn" onClick={() => openViewer([{ src: fileUrl(page.filePath), label: page.sourceName, sub: item.problem }])}>Open large</button>
+                <button className="btn" onClick={() => openViewer([{ src: fileUrl(page.filePath), label: page.sourceName, sub: item.problem, pageId: page.id }])}>Open large</button>
               </div>
             )}
           </div>

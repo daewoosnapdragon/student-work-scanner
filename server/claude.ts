@@ -8,12 +8,13 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import { z } from 'zod'
-import sharp from 'sharp'
 import {
   getAssignment, getMeta, getPacket, getStudent, packetPages, packetsForAssignment, setAssignmentAnalysis, setMeta,
   setPacketFeedback, setPacketScore, replaceSkills, markAnalysed, replaceDomains, setPacketCorrections, setPacketCriteria, setPacketProgress,
 } from './db.js'
 import { historyText, latestLevels, studentHistory } from './history.js'
+import { annotationsForPage } from './db.js'
+import { annotationsText, pageJpeg } from './marks.js'
 import { abs } from './pipeline.js'
 import { broadcast } from './events.js'
 import { sideLabel } from './codes.js'
@@ -139,9 +140,10 @@ const ClassResult = z.object({
   noticing: z.string().describe('One sentence about one student worth the teacher\'s attention this week: a change, a jump, or a worry. Name the student.'),
 })
 
-async function pageImage(file: string): Promise<Anthropic.ImageBlockParam> {
-  const buf = await sharp(file, { failOn: 'none' }).rotate().resize({ width: 1568, withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer()
-  return { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: buf.toString('base64') } }
+// The page as Claude sees it: with the teacher's comment boxes drawn on when there are any.
+async function pageImage(file: string, marks: Parameters<typeof pageJpeg>[1] = []): Promise<Anthropic.ImageBlockParam> {
+  const { buffer } = await pageJpeg(file, marks, 1568, 80)
+  return { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: buffer.toString('base64') } }
 }
 
 function system(a: Assignment, rubric: Rubric, domains: string[], skills: SkillDef[] = skillVocabulary()): string {
@@ -153,6 +155,7 @@ function system(a: Assignment, rubric: Rubric, domains: string[], skills: SkillD
     `This assignment: "${a.title}" (${a.code}), ${a.klass}${a.grade != null ? `, grade ${a.grade}` : ''}${a.tags ? `, on ${a.tags}` : ''}. ${a.sheets} sheet${a.sheets === 1 ? '' : 's'}${a.twoSided ? ', both sides' : ''}.${a.notes ? ` Notes: ${a.notes}` : ''}`,
     rubricText(rubric, a.grade, domains),
     `Skills are named only from this list, so the same skill has the same name on every assignment and a child's progress can be followed (group: names):\n${skillListForPrompt(skills)}`,
+    'Where the teacher has marked a page, the marks are listed after it and drawn on it as thin numbered boxes; they are the teacher\'s, not the child\'s work, and they are the ground truth. A "fix" mark names a mistake that goes in the fix-it table before anything you found yourself, in the teacher\'s terms. A "praise" mark names a strength the student\'s note quotes. A "note" is context to use, and a question in one is for you to answer in the teacher\'s note.',
     'When earlier work by the same child is given: read the new pages on their own first and judge them as they are; only then compare. The earlier work says where to look, not what to find. If a skill the child was weak on has clearly moved up, the note to the student opens with that, naming the exact thing they did, before anything else, and the teacher\'s note says what moved and what did not. If the last note asked the child to try something, say whether they did. Never claim progress the pages do not show.',
     ctx ? `About the class and how the teacher works: ${ctx}` : '',
   ].filter(Boolean).join('\n\n')
@@ -173,8 +176,11 @@ export async function analysePacket(student: string, assignment: string): Promis
   const first = s.name.replace(/\s*\(([^)]*)\)\s*$/, (_m, nick) => ` (${nick})`)
   const content: Anthropic.ContentBlockParam[] = []
   for (const p of pages) {
-    content.push({ type: 'text', text: `${sideLabel(p.page ?? 1, p.side ?? 'a')}:` })
-    content.push(await pageImage(abs(p.filePath)))
+    const side = sideLabel(p.page ?? 1, p.side ?? 'a')
+    const marks = annotationsForPage(p.id)
+    content.push({ type: 'text', text: `${side}:` })
+    content.push(await pageImage(abs(p.filePath), marks))
+    if (marks.length) content.push({ type: 'text', text: annotationsText(marks, side) })
   }
   const history = studentHistory(student, assignment)
   const firstName = (/\(([^)]+)\)\s*$/.exec(s.name)?.[1] ?? s.name.split(/\s+/)[0]).trim()

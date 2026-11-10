@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DB_PATH } from './config.js'
 import type { Assignment, Packet, Page, Progress, Side, Student } from '../shared/types.js'
+import type { Annotation, AnnotationKind } from '../shared/annotations.js'
 import { expectedSides } from './codes.js'
 
 let db: DatabaseSync
@@ -98,6 +99,18 @@ function migrate(d: DatabaseSync) {
     at TEXT NOT NULL,
     PRIMARY KEY (student, assignment, domain)
   );
+  CREATE TABLE IF NOT EXISTS annotations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pageId INTEGER NOT NULL,
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    w REAL NOT NULL,
+    h REAL NOT NULL,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS annotations_page ON annotations(pageId, createdAt);
   `)
   // Columns added after the first release.
   const cols = (d.prepare('PRAGMA table_info(students)').all() as Array<{ name: string }>).map((c) => c.name)
@@ -349,6 +362,45 @@ export function domainsForAssignment(assignment: string): DomainRow[] {
 }
 export function domainsForStudent(student: string): DomainRow[] {
   return getDb().prepare('SELECT * FROM domains WHERE student = ? ORDER BY at, domain').all(student) as unknown as DomainRow[]
+}
+
+// ---------- annotations: the teacher's comments pinned to a spot on a page ----------
+export function annotationsForPage(pageId: number): Annotation[] {
+  return getDb().prepare('SELECT * FROM annotations WHERE pageId = ? ORDER BY createdAt, id').all(pageId) as unknown as Annotation[]
+}
+export function annotationsForPages(pageIds: number[]): Annotation[] {
+  if (!pageIds.length) return []
+  return getDb().prepare(`SELECT * FROM annotations WHERE pageId IN (${pageIds.map(() => '?').join(',')}) ORDER BY pageId, createdAt, id`).all(...pageIds) as unknown as Annotation[]
+}
+/** How many comments each of these pages carries; pages with none are left out. */
+export function annotationCounts(pageIds: number[]): Map<number, number> {
+  const out = new Map<number, number>()
+  if (!pageIds.length) return out
+  const rows = getDb().prepare(`SELECT pageId, COUNT(*) AS n FROM annotations WHERE pageId IN (${pageIds.map(() => '?').join(',')}) GROUP BY pageId`).all(...pageIds) as Array<{ pageId: number; n: number }>
+  for (const r of rows) out.set(r.pageId, r.n)
+  return out
+}
+export function getAnnotation(id: number): Annotation | undefined {
+  return getDb().prepare('SELECT * FROM annotations WHERE id = ?').get(id) as unknown as Annotation | undefined
+}
+export function insertAnnotation(a: { pageId: number; x: number; y: number; w: number; h: number; kind: AnnotationKind; text: string }): Annotation {
+  const r = getDb().prepare('INSERT INTO annotations (pageId, x, y, w, h, kind, text, createdAt) VALUES (?,?,?,?,?,?,?,?)').run(a.pageId, a.x, a.y, a.w, a.h, a.kind, a.text, new Date().toISOString())
+  return getAnnotation(Number(r.lastInsertRowid))!
+}
+export function updateAnnotation(id: number, patch: Partial<Pick<Annotation, 'x' | 'y' | 'w' | 'h' | 'kind' | 'text'>>): Annotation | undefined {
+  const a = getAnnotation(id)
+  if (!a) return undefined
+  const n = { ...a, ...patch }
+  getDb().prepare('UPDATE annotations SET x = ?, y = ?, w = ?, h = ?, kind = ?, text = ? WHERE id = ?').run(n.x, n.y, n.w, n.h, n.kind, n.text, id)
+  return getAnnotation(id)
+}
+export function deleteAnnotation(id: number): boolean {
+  return getDb().prepare('DELETE FROM annotations WHERE id = ?').run(id).changes > 0
+}
+/** Pages with their comment counts attached, for lists that show a badge. */
+export function withAnnotationCounts<T extends { id: number }>(pages: T[]): Array<T & { annotations: number }> {
+  const counts = annotationCounts(pages.map((p) => p.id))
+  return pages.map((p) => ({ ...p, annotations: counts.get(p.id) ?? 0 }))
 }
 
 // ---------- meta ----------

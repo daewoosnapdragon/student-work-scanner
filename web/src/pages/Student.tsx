@@ -19,7 +19,7 @@ export default function StudentPage() {
   const { student: s, packets } = data
   const latest = data.pages[0]
   // Every page of this student, newest first, so the arrows walk back through their work.
-  const allPages: ViewerPage[] = data.pages.map((pg) => ({ src: fileUrl(pg.filePath), label: `${pg.assignment} · ${sideLabel(pg.page, pg.side)}`, sub: `${s.name} · ${fmtDate(pg.scannedAt)}` }))
+  const allPages: ViewerPage[] = data.pages.map((pg) => ({ src: fileUrl(pg.filePath), label: `${pg.assignment} · ${sideLabel(pg.page, pg.side)}`, sub: `${s.name} · ${fmtDate(pg.scannedAt)}`, pageId: pg.id }))
   const complete = packets.filter((p) => p.complete && !p.closedIncomplete).length
   const scored = packets.filter((p) => p.score != null)
   return (
@@ -51,7 +51,7 @@ export default function StudentPage() {
           {latest ? (
             <>
               <div className="small">{latest.assignment} · {sideLabel(latest.page, latest.side)} · {fmtDate(latest.scannedAt)}</div>
-              <ScanLink pages={allPages} index={0} style={{ maxWidth: 360 }}><img className="scan" src={fileUrl(latest.thumbPath ?? latest.filePath)} alt={`${latest.assignment} ${sideLabel(latest.page, latest.side)}`} /></ScanLink>
+              <ScanLink pages={allPages} index={0} style={{ maxWidth: 360 }} badge={latest.annotations}><img className="scan" src={fileUrl(latest.thumbPath ?? latest.filePath)} alt={`${latest.assignment} ${sideLabel(latest.page, latest.side)}`} /></ScanLink>
             </>
           ) : <p className="muted" style={{ margin: 0 }}>Nothing scanned yet for {s.name}.</p>}
         </div>
@@ -88,7 +88,7 @@ function PacketRows({ p, ratings, open, toggle }: { p: PacketRow; ratings: Ratin
       {p.feedback && <div><div className="over quiet" style={{ fontSize: 10, marginBottom: 4 }}>Feedback · for the student</div><p>{p.feedback}</p></div>}
     </>
   ) : undefined
-  const viewPages: ViewerPage[] = p.pages.map((pg) => ({ src: fileUrl(pg.filePath), label: `${p.assignment} · ${sideLabel(pg.page, pg.side)}`, sub: a?.title, panel }))
+  const viewPages: ViewerPage[] = p.pages.map((pg) => ({ src: fileUrl(pg.filePath), label: `${p.assignment} · ${sideLabel(pg.page, pg.side)}`, sub: a?.title, pageId: pg.id, panel }))
   return (
     <>
       <tr>
@@ -104,7 +104,7 @@ function PacketRows({ p, ratings, open, toggle }: { p: PacketRow; ratings: Ratin
           <div className="thumbs">
             {p.pages.map((pg, i) => (
               <div key={pg.id} className="thumb">
-                <ScanLink pages={viewPages} index={i}><img src={fileUrl(pg.thumbPath ?? pg.filePath)} alt={sideLabel(pg.page, pg.side)} /></ScanLink>
+                <ScanLink pages={viewPages} index={i} badge={pg.annotations}><img src={fileUrl(pg.thumbPath ?? pg.filePath)} alt={sideLabel(pg.page, pg.side)} /></ScanLink>
                 <span>{sideLabel(pg.page, pg.side)}{pg.filedFrom === 'review' && <span className="muted"> · filed by hand</span>}</span>
               </div>
             ))}

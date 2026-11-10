@@ -85,3 +85,17 @@ h1.title{font-size:44px;line-height:1.1;font-weight:700}
 .viewer-keys{display:flex;gap:18px;flex-wrap:wrap;padding:6px 18px 10px;opacity:.6}
 .viewer-keys .key{background:transparent;color:#f6f1e7;border-color:rgba(246,241,231,.4)}
 @media (max-width:700px){.viewer-panel{display:none}.viewer-keys{display:none}}
+
+/* Comments pinned to a page, in the viewer. */
+.vbtn.on{background:var(--accent);border-color:var(--accent)}
+.scanbadge{position:absolute;top:6px;right:6px;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--accent);color:#fff;font-size:11px;font-weight:700;line-height:20px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.viewer-hint{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);background:rgba(31,27,23,.85);color:#f6f1e7;padding:6px 12px;border-radius:3px;font-size:12.5px;pointer-events:none;border:1px solid rgba(246,241,231,.2)}
+.comment-editor{position:absolute;left:16px;bottom:16px;width:min(420px,calc(100% - 32px));background:var(--card);color:var(--ink);border:1px solid var(--line);box-shadow:0 6px 30px rgba(0,0,0,.45);padding:12px 14px;display:flex;flex-direction:column;gap:10px;cursor:default}
+.comment-editor textarea{width:100%;font:inherit;font-size:13.5px;padding:8px 10px;border:1px solid var(--chip);border-radius:3px;background:#fff;resize:vertical;color:var(--ink)}
+.comment-editor .chip{cursor:pointer;font-family:inherit}
+.comment-editor .chip.on{color:#fff}
+.mark{position:absolute;border-style:solid;box-sizing:border-box;cursor:pointer}
+.mark-n{position:absolute;min-width:20px;height:20px;padding:0 5px;border-radius:10px;color:#fff;font-size:12px;font-weight:700;line-height:20px;text-align:center;font-family:'IBM Plex Sans',system-ui,sans-serif;pointer-events:none}
+.comment-row{display:flex;gap:10px;align-items:flex-start;text-align:left;font:inherit;color:inherit;background:#fff;border:1px solid var(--line);border-left:3px solid var(--chip);padding:8px 10px;cursor:pointer;font-size:13px;line-height:1.4}
+.comment-row:hover{border-color:var(--accent)}
+.comment-n{flex:none;min-width:20px;height:20px;padding:0 5px;border-radius:10px;color:#fff;font-size:11px;font-weight:700;line-height:20px;text-align:center}

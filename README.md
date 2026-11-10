@@ -58,6 +58,8 @@ Open http://localhost:4710. Ten pages file themselves. One has its code torn off
 
 Clicking any scan opens it over the current screen rather than in a new tab: wheel or pinch to zoom, drag to move, arrow keys to step through the packet's sides (on a student's page, through all their work), R to turn it, 0 to fit, Escape or the browser's Back to close. Where there is analysis, its notes sit beside the page. On Compare, the two children's pages open together and zoom and move as one.
 
+In the viewer, **Comment** (or C) lets you drag a box over any spot on the page and write what you see there: **Praise**, **Fix** or **Note**. Comments are kept with the page, show as numbered boxes in the viewer and as a count on the thumbnail, and go to Claude the next time the packet is analysed, both drawn on the page and listed by number. They are the ground truth: a fix goes first in the fix-it table in your words, praise is quoted in the student's note, and a question in a note is answered in the teacher's part. The class and packet PDFs carry the boxes too, so the copied prompt can point at them.
+
 Review is keyboard first: J and K move, 1 to 3 pick a guess, Enter files, X skips, R rotates. Skip everything in the queue clears a backlog in one go, for example old scans without codes that were already in the folder when the program first started. Skipped pages stay on disk under `data/holding/`.
 
 Before the first run, empty the scan folder of old scans, or expect them all in review.

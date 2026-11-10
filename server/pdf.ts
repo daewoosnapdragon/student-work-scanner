@@ -1,8 +1,9 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
-import sharp from 'sharp'
 import type { Assignment, Page, Student } from '../shared/types.js'
 import { sideLabel } from './codes.js'
 import { abs } from './pipeline.js'
+import { annotationsForPage } from './db.js'
+import { pageJpeg } from './marks.js'
 
 // A4 in points. Every scan goes on its own page under a one-line header,
 // scaled to fit, so a class PDF reads in the same order as the app.
@@ -24,7 +25,7 @@ export async function buildPdf(a: Assignment, sections: PdfSection[]): Promise<U
   const bold = await doc.embedFont(StandardFonts.HelveticaBold)
   for (const { student, pages } of sections) {
     for (const p of pages) {
-      const jpg = await sharp(abs(p.filePath), { failOn: 'none' }).rotate().resize({ width: 1600, withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer()
+      const { buffer: jpg } = await pageJpeg(abs(p.filePath), annotationsForPage(p.id), 1600, 82)
       const img = await doc.embedJpg(jpg)
       const page = doc.addPage([W, H])
       const boxW = W - MARGIN * 2

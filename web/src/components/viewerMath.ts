@@ -47,3 +47,20 @@ export function wheelFactor(deltaY: number, deltaMode: number): number {
   const px = deltaMode === 1 ? deltaY * 16 : deltaMode === 2 ? deltaY * 400 : deltaY
   return Math.exp(-px * 0.0022)
 }
+
+/**
+ * A stage point as fractions of the upright page (0 to 1 from the left and
+ * the top), undoing the view and the rotation. CSS rotate turns clockwise,
+ * so at 90° the page's top-left corner sits at the visual box's top-right.
+ */
+export function toPageFraction(px: number, py: number, view: View, img: Size, rotate: number): { fx: number; fy: number } {
+  const vis = turned(img, rotate)
+  const vx = (px - view.x) / view.s / vis.w
+  const vy = (py - view.y) / view.s / vis.h
+  switch (((rotate % 360) + 360) % 360) {
+    case 90: return { fx: vy, fy: 1 - vx }
+    case 180: return { fx: 1 - vx, fy: 1 - vy }
+    case 270: return { fx: 1 - vy, fy: vx }
+    default: return { fx: vx, fy: vy }
+  }
+}
