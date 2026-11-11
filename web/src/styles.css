@@ -95,6 +95,8 @@ h1.title{font-size:44px;line-height:1.1;font-weight:700}
 .comment-editor .chip{cursor:pointer;font-family:inherit}
 .comment-editor .chip.on{color:#fff}
 .mark{position:absolute;border-style:solid;box-sizing:border-box;cursor:pointer}
+.mark.edit{cursor:move}
+.mark-handle{position:absolute;z-index:1;width:12px;height:12px;box-sizing:border-box;background:#fff;border:2px solid;border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.3);pointer-events:auto;touch-action:none}
 .mark-n{position:absolute;min-width:20px;height:20px;padding:0 5px;border-radius:10px;color:#fff;font-size:12px;font-weight:700;line-height:20px;text-align:center;font-family:'IBM Plex Sans',system-ui,sans-serif;pointer-events:none}
 .comment-row{display:flex;gap:10px;align-items:flex-start;text-align:left;font:inherit;color:inherit;background:#fff;border:1px solid var(--line);border-left:3px solid var(--chip);padding:8px 10px;cursor:pointer;font-size:13px;line-height:1.4}
 .comment-row:hover{border-color:var(--accent)}

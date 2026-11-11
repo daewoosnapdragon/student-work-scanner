@@ -12,11 +12,14 @@
 // label on the page: its words on a pale card the width of the box, with the
 // number on the card's corner. The Aa control sets the words' size and face,
 // or hides them; with the words hidden the box shows as an outline instead.
+// An open comment can be moved: drag its card or box, pull a handle to
+// resize, or use the arrow keys (Shift resizes). A move is saved on release.
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode, type WheelEvent as RWheelEvent } from 'react'
 import { fitView, panBy, rotateView, toPageFraction, wheelFactor, zoomAt, type Size, type View } from './viewerMath'
 import { del, get, post, put } from '../api'
 import { ANNOTATION_KINDS, clampBox, KIND_COLOR, type Annotation, type AnnotationKind } from '../../../shared/annotations'
 import { clampSize, fontFamily, loadMarkText, MARK_FONTS, MAX_SIZE, MIN_SIZE, saveMarkText, SIZE_STEP, type MarkTextStyle } from './markText'
+import { handleAt, handleCursor, HANDLES, moveBox, nudgeBox, resizeBox, type Handle } from './boxEdit'
 
 export interface ViewerPage {
   src: string
@@ -84,7 +87,10 @@ export function ScanLink({ pages, index = 0, children, title, style, badge }: { 
 
 type Box = { x: number; y: number; w: number; h: number }
 type Editing = { id: number | null; box: Box; kind: AnnotationKind; text: string }
-type Drawn = Box & { kind: AnnotationKind; n: number; id: number | null; active: boolean; text: string }
+/** `edit`: the comment is open, so its box shows handles and can be dragged; `lifted`: it is being dragged, so its card fades to show the page beneath. */
+type Drawn = Box & { kind: AnnotationKind; n: number; id: number | null; active: boolean; text: string; edit: boolean; lifted: boolean }
+/** A drag of an open comment's box: by its body (move) or by a handle (resize), from where the pointer first touched the page. */
+type BoxDrag = { mode: 'move' | Handle; from: { fx: number; fy: number }; box: Box; now: Box; moved: boolean }
 
 function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index: number; setIndex: (i: number) => void; close: () => void }) {
   const page = pages[index]
@@ -111,6 +117,10 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
   const [lastKind, setLastKind] = useState<AnnotationKind>('fix')
   const [err, setErr] = useState<string | null>(null)
   const canComment = page.pageId != null
+  // The open comment's box being dragged or resized, while the pointer is down.
+  const boxDrag = useRef<BoxDrag | null>(null)
+  const [lifting, setLifting] = useState(false)
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // How the comment text is drawn in its box, remembered across pages and visits.
   const [textStyle, setTextStyle] = useState<MarkTextStyle>(loadMarkText)
@@ -187,6 +197,7 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
         else if (commenting) setCommenting(false)
         else close()
       }
+      else if (editing && e.key.startsWith('Arrow')) { e.preventDefault(); nudge(e.key, e.shiftKey) }
       else if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'j' || e.key === 'J' || e.key === 'PageDown') { e.preventDefault(); step(1) }
       else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'k' || e.key === 'K' || e.key === 'PageUp') { e.preventDefault(); step(-1) }
       else if (e.key === 'r' || e.key === 'R') turn()
@@ -215,6 +226,39 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
     const { fx, fy } = toPageFraction(p.x, p.y, view, img, rotate)
     return { fx: Math.max(0, Math.min(1, fx)), fy: Math.max(0, Math.min(1, fy)), on: fx >= 0 && fx <= 1 && fy >= 0 && fy <= 1 }
   }
+  // The page fractions under the pointer without clamping, for measuring a drag's distance.
+  function rawPagePoint(e: { clientX: number; clientY: number }) {
+    const p = stagePoint(e)
+    return toPageFraction(p.x, p.y, view, img!, rotate)
+  }
+  // A press on the open comment's card or box (move) or one of its handles (resize).
+  // The stage takes the pointer, so the move and release reach it wherever the pointer goes.
+  function onBoxDown(mode: 'move' | Handle, e: RPointerEvent) {
+    if (!editing || !img || (e.button !== 0 && e.pointerType === 'mouse')) return
+    e.stopPropagation()
+    stageRef.current!.setPointerCapture(e.pointerId)
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    dragged.current = false
+    downOnBackdrop.current = false
+    boxDrag.current = { mode, from: rawPagePoint(e), box: editing.box, now: editing.box, moved: false }
+  }
+  // A changed box goes to the server after a short pause, so a held arrow key sends one save, not fifty.
+  function saveBox(id: number, box: Box, delay: number) {
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null
+      put(`/api/annotations/${id}`, box).then(() => loadMarks()).catch((e) => setErr((e as Error).message))
+    }, delay)
+  }
+  function setBox(box: Box, delay: number) {
+    setEditing((ed) => (ed ? { ...ed, box } : ed))
+    if (editing?.id != null) saveBox(editing.id, box, delay)
+  }
+  function nudge(key: string, resize: boolean) {
+    if (!editing) return
+    const box = nudgeBox(editing.box, key, resize)
+    if (box) setBox(box, 400)
+  }
   function onWheel(e: RWheelEvent) {
     e.preventDefault()
     const p = stagePoint(e)
@@ -241,6 +285,18 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
     const prev = pointers.current.get(e.pointerId)
     if (!prev) return
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    const bd = boxDrag.current
+    if (bd) {
+      const to = rawPagePoint(e)
+      const dx = to.fx - bd.from.fx, dy = to.fy - bd.from.fy
+      if (!bd.moved && Math.abs(dx) + Math.abs(dy) < 0.001) return
+      bd.moved = true
+      dragged.current = true
+      if (!lifting) setLifting(true)
+      bd.now = bd.mode === 'move' ? moveBox(bd.box, dx, dy) : resizeBox(bd.box, bd.mode, dx, dy)
+      setEditing((ed) => (ed ? { ...ed, box: bd.now } : ed))
+      return
+    }
     if (draft) {
       const pt = pagePoint(e)
       if (pt) setDraft({ ...draft, box: { x: Math.min(draft.x0, pt.fx), y: Math.min(draft.y0, pt.fy), w: Math.abs(pt.fx - draft.x0), h: Math.abs(pt.fy - draft.y0) } })
@@ -265,6 +321,13 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
   function onPointerUp(e: RPointerEvent) {
     pointers.current.delete(e.pointerId)
     if (pointers.current.size < 2) pinch.current = null
+    const bd = boxDrag.current
+    if (bd) {
+      boxDrag.current = null
+      setLifting(false)
+      if (bd.moved && editing?.id != null) saveBox(editing.id, bd.now, 0)
+      return
+    }
     if (draft) {
       // A click rather than a drag drops a small box centred on the spot.
       let box = draft.box
@@ -316,9 +379,12 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
   const cursor = commenting ? 'crosshair' : fitted ? 'zoom-in' : 'grab'
   // While a comment is being edited its box shows the words as they are typed.
   const drawn: Drawn[] = [
-    ...marks.map((m, i) => ({ x: m.x, y: m.y, w: m.w, h: m.h, kind: m.kind, n: i + 1, id: m.id, active: editing?.id === m.id, text: editing?.id === m.id ? editing.text : m.text })),
-    ...(draft ? [{ ...draft.box, kind: lastKind, n: marks.length + 1, id: null, active: true, text: '' }] : []),
-    ...(editing && editing.id == null ? [{ ...editing.box, kind: editing.kind, n: marks.length + 1, id: null, active: true, text: editing.text }] : []),
+    ...marks.map((m, i) => {
+      const open = editing?.id === m.id
+      return { ...(open ? editing.box : { x: m.x, y: m.y, w: m.w, h: m.h }), kind: m.kind, n: i + 1, id: m.id, active: open, text: open ? editing.text : m.text, edit: open, lifted: open && lifting }
+    }),
+    ...(draft ? [{ ...draft.box, kind: lastKind, n: marks.length + 1, id: null, active: true, text: '', edit: false, lifted: false }] : []),
+    ...(editing && editing.id == null ? [{ ...editing.box, kind: editing.kind, n: marks.length + 1, id: null, active: true, text: editing.text, edit: true, lifted: lifting }] : []),
   ]
   const textOn = textStyle.show ? textStyle : null
 
@@ -374,11 +440,11 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
         <div ref={stageRef} className="viewer-stage" data-backdrop="1" onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onDoubleClick={onDoubleClick} onClick={onBackdropClick} style={{ cursor }}>
           {page.pair ? (
             <div style={{ position: 'absolute', inset: 0, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: PAIR_GAP, padding: 0 }}>
-              <Pane src={page.src} view={view} rotate={rotate} img={img} vis={vis} onSize={setImg} marks={drawn} text={textOn} onMark={(id) => { const m = marks.find((x) => x.id === id); if (m) openMark(m) }} />
-              <Pane src={page.pair.src} view={view} rotate={rotate} img={img} vis={vis} onSize={null} marks={[]} text={null} onMark={() => {}} />
+              <Pane src={page.src} view={view} rotate={rotate} img={img} vis={vis} onSize={setImg} marks={drawn} text={textOn} onMark={(id) => { const m = marks.find((x) => x.id === id); if (m) openMark(m) }} onBoxDown={onBoxDown} />
+              <Pane src={page.pair.src} view={view} rotate={rotate} img={img} vis={vis} onSize={null} marks={[]} text={null} onMark={() => {}} onBoxDown={() => {}} />
             </div>
           ) : (
-            <Pane src={page.src} view={view} rotate={rotate} img={img} vis={vis} onSize={setImg} marks={drawn} text={textOn} onMark={(id) => { const m = marks.find((x) => x.id === id); if (m) openMark(m) }} />
+            <Pane src={page.src} view={view} rotate={rotate} img={img} vis={vis} onSize={setImg} marks={drawn} text={textOn} onMark={(id) => { const m = marks.find((x) => x.id === id); if (m) openMark(m) }} onBoxDown={onBoxDown} />
           )}
           {!img && <div className="viewer-loading">Loading</div>}
           {commenting && !editing && !draft && <div className="viewer-hint">Drag a box over the spot, or click it. Esc to stop commenting.</div>}
@@ -394,7 +460,7 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
                 autoFocus
                 value={editing.text}
                 onChange={(e) => setEditing({ ...editing, text: e.target.value })}
-                onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setEditing(null) } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void saveEditing() } }}
+                onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setEditing(null) } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void saveEditing() } else if (e.altKey && e.key.startsWith('Arrow')) { e.preventDefault(); nudge(e.key, e.shiftKey) } }}
                 rows={3}
                 placeholder={editing.kind === 'fix' ? 'What is wrong here, in your words: "she go → she goes"' : editing.kind === 'praise' ? 'What is good here: "a full sentence with a capital and a full stop"' : 'Anything the analysis should know, or a question for it'}
               />
@@ -404,7 +470,7 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
                 {editing.id != null && <button type="button" className="btn" style={{ marginLeft: 'auto' }} onClick={() => void removeEditing()}>Delete</button>}
                 {err && <span className="err">{err}</span>}
               </div>
-              <div className="muted small">Claude reads this with the page next time the packet is analysed. Ctrl+Enter saves.</div>
+              <div className="muted small">Drag the box to move it, pull a handle to resize, or use the arrow keys (Shift resizes; Alt+arrows from in here). Claude reads this with the page next time the packet is analysed. Ctrl+Enter saves.</div>
             </div>
           )}
         </div>
@@ -454,10 +520,13 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
 // top-left corner with the number on its corner, and no outline round the
 // box itself, so a note never looks like a window inside a window. A box
 // with no words to show (words hidden, or still being drawn) keeps a thin
-// outline with the number on its corner, so the spot is always marked.
-function Pane({ src, view, rotate, img, vis, onSize, marks, text, onMark }: {
+// outline with the number on its corner, so the spot is always marked. The
+// open comment shows its box as a dashed outline with eight handles; a
+// press on its card or box starts a move, a press on a handle a resize,
+// and while it is dragged the card fades so the page beneath can be read.
+function Pane({ src, view, rotate, img, vis, onSize, marks, text, onMark, onBoxDown }: {
   src: string; view: View; rotate: number; img: Size | null; vis: Size | null; onSize: ((s: Size) => void) | null
-  marks: Drawn[]; text: MarkTextStyle | null; onMark: (id: number) => void
+  marks: Drawn[]; text: MarkTextStyle | null; onMark: (id: number) => void; onBoxDown: (mode: 'move' | Handle, e: RPointerEvent) => void
 }) {
   const inner = { position: 'absolute' as const, left: vis && img ? (vis.w - img.w) / 2 : 0, top: vis && img ? (vis.h - img.h) / 2 : 0, width: img?.w ?? 0, height: img?.h ?? 0, transform: `rotate(${rotate}deg)` }
   const k = 1 / view.s
@@ -477,15 +546,17 @@ function Pane({ src, view, rotate, img, vis, onSize, marks, text, onMark }: {
               const c = KIND_COLOR[m.kind]
               const labelled = !!text && m.text.trim() !== ''
               const ring = m.active ? `0 0 0 ${3 * k}px ${c}55` : undefined
+              const bw = m.w * img.w, bh = m.h * img.h
+              const hit = m.id != null || m.edit
               return (
                 <div
                   key={m.id ?? `draft-${m.n}`}
-                  className="mark"
-                  onPointerDown={(e) => { if (m.id != null) { e.stopPropagation(); } }}
-                  onClick={(e) => { if (m.id != null) { e.stopPropagation(); onMark(m.id) } }}
+                  className={`mark ${m.edit ? 'edit' : ''}`}
+                  onPointerDown={(e) => { if (m.edit) onBoxDown('move', e); else if (m.id != null) e.stopPropagation() }}
+                  onClick={(e) => { if (m.edit) e.stopPropagation(); else if (m.id != null) { e.stopPropagation(); onMark(m.id) } }}
                   style={labelled
-                    ? { left: m.x * img.w, top: m.y * img.h, width: m.w * img.w, height: m.h * img.h, border: 'none', pointerEvents: m.id != null ? 'auto' : 'none' }
-                    : { left: m.x * img.w, top: m.y * img.h, width: m.w * img.w, height: m.h * img.h, borderColor: c, borderWidth: Math.max(1, 2 * k), background: `${c}${m.active ? '26' : '0f'}`, boxShadow: ring, pointerEvents: m.id != null ? 'auto' : 'none', borderRadius: 3 * k }}
+                    ? { left: m.x * img.w, top: m.y * img.h, width: bw, height: bh, border: m.edit ? `${Math.max(1, 1.5 * k)}px dashed ${c}` : 'none', pointerEvents: hit ? 'auto' : 'none' }
+                    : { left: m.x * img.w, top: m.y * img.h, width: bw, height: bh, borderColor: c, borderWidth: Math.max(1, 2 * k), borderStyle: m.edit ? 'dashed' : 'solid', background: `${c}${m.active ? '26' : '0f'}`, boxShadow: ring, pointerEvents: hit ? 'auto' : 'none', borderRadius: 3 * k }}
                 >
                   {labelled && (
                     <div
@@ -495,11 +566,22 @@ function Pane({ src, view, rotate, img, vis, onSize, marks, text, onMark }: {
                         transform: `scale(${k})`, transformOrigin: '0 0', left: 0, top: 0,
                         width: Math.max(140, (m.w * img.w) / k), maxWidth: Math.max(140, (img.w - m.x * img.w) / k),
                         fontSize: text!.size, fontFamily: fontFamily(text!.font), color: c, borderColor: `${c}66`, boxShadow: ring ?? '0 1px 4px rgba(0,0,0,.18)',
-                        pointerEvents: m.id != null ? 'auto' : 'none',
+                        pointerEvents: hit ? 'auto' : 'none', opacity: m.lifted ? 0.35 : 1,
                       }}
                     >{m.text}</div>
                   )}
-                  <span className="mark-n" style={{ background: c, transform: `scale(${k})`, transformOrigin: '0 0', left: (labelled ? -6 : -1) * k, top: (labelled ? -6 : -1) * k }}>{m.n}</span>
+                  <span className="mark-n" style={{ background: c, transform: `scale(${k})`, transformOrigin: '0 0', left: (labelled ? -6 : -1) * k, top: (labelled ? -6 : -1) * k, opacity: m.lifted ? 0.5 : 1 }}>{m.n}</span>
+                  {m.edit && HANDLES.map((h) => {
+                    const at = handleAt(h, bw, bh)
+                    return (
+                      <span
+                        key={h}
+                        className="mark-handle"
+                        onPointerDown={(e) => onBoxDown(h, e)}
+                        style={{ left: at.x - 6 * k, top: at.y - 6 * k, transform: `scale(${k})`, transformOrigin: '0 0', borderColor: c, cursor: handleCursor(h) }}
+                      />
+                    )
+                  })}
                 </div>
               )
             })}
