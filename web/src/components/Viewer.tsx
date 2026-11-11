@@ -8,11 +8,13 @@
 // A page that knows its id can take comments: press C (or Comment), drag a
 // box over the spot, write the comment, pick praise, fix or note. Comments
 // are kept on the server as fractions of the page and drawn on the copy
-// Claude reads when the packet is analysed again.
+// Claude reads when the packet is analysed again. Each comment's words show
+// inside its box; the Aa control sets their size and face, or hides them.
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode, type WheelEvent as RWheelEvent } from 'react'
 import { fitView, panBy, rotateView, toPageFraction, wheelFactor, zoomAt, type Size, type View } from './viewerMath'
 import { del, get, post, put } from '../api'
 import { ANNOTATION_KINDS, clampBox, KIND_COLOR, type Annotation, type AnnotationKind } from '../../../shared/annotations'
+import { clampSize, fontFamily, loadMarkText, MARK_FONTS, MAX_SIZE, MIN_SIZE, saveMarkText, SIZE_STEP, type MarkTextStyle } from './markText'
 
 export interface ViewerPage {
   src: string
@@ -80,6 +82,7 @@ export function ScanLink({ pages, index = 0, children, title, style, badge }: { 
 
 type Box = { x: number; y: number; w: number; h: number }
 type Editing = { id: number | null; box: Box; kind: AnnotationKind; text: string }
+type Drawn = Box & { kind: AnnotationKind; n: number; id: number | null; active: boolean; text: string }
 
 function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index: number; setIndex: (i: number) => void; close: () => void }) {
   const page = pages[index]
@@ -93,6 +96,10 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
   const pointers = useRef(new Map<number, { x: number; y: number }>())
   const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null)
   const dragged = useRef(false)
+  // Whether the press began on the dark surround rather than the page. The
+  // stage captures the pointer, so the click that follows reports the stage
+  // as its target whatever was under the pointer; the press knows better.
+  const downOnBackdrop = useRef(false)
 
   // Comments on this page, and the one being drawn or edited.
   const [marks, setMarks] = useState<Annotation[]>([])
@@ -102,6 +109,11 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
   const [lastKind, setLastKind] = useState<AnnotationKind>('fix')
   const [err, setErr] = useState<string | null>(null)
   const canComment = page.pageId != null
+
+  // How the comment text is drawn in its box, remembered across pages and visits.
+  const [textStyle, setTextStyle] = useState<MarkTextStyle>(loadMarkText)
+  const [textMenu, setTextMenu] = useState(false)
+  const setText = (patch: Partial<MarkTextStyle>) => setTextStyle((t) => { const n = { ...t, ...patch, size: clampSize(patch.size ?? t.size) }; saveMarkText(n); return n })
 
   const loadMarks = useCallback(() => {
     if (page.pageId == null) return setMarks([])
@@ -167,7 +179,8 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return
       if (e.key === 'Escape') {
         e.preventDefault()
-        if (editing) setEditing(null)
+        if (textMenu) setTextMenu(false)
+        else if (editing) setEditing(null)
         else if (draft) setDraft(null)
         else if (commenting) setCommenting(false)
         else close()
@@ -180,10 +193,11 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
       else if (e.key === '-' || e.key === '_') zoomCentre(0.8)
       else if (e.key === 'n' || e.key === 'N') setPanel((p) => !p)
       else if ((e.key === 'c' || e.key === 'C') && canComment) setCommenting((c) => !c)
+      else if ((e.key === 't' || e.key === 'T') && canComment) setText({ show: !textStyle.show })
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [close, step, turn, fit, zoomCentre, canComment, editing, draft, commenting])
+  }, [close, step, turn, fit, zoomCentre, canComment, editing, draft, commenting, textMenu, textStyle.show])
 
   function stagePoint(e: { clientX: number; clientY: number }) {
     const r = stageRef.current!.getBoundingClientRect()
@@ -210,6 +224,7 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
     dragged.current = false
+    downOnBackdrop.current = !!(e.target as HTMLElement).dataset.backdrop
     if (commenting && pointers.current.size === 1 && !editing) {
       const pt = pagePoint(e)
       if (pt?.on) { setDraft({ x0: pt.fx, y0: pt.fy, box: { x: pt.fx, y: pt.fy, w: 0, h: 0 } }); return }
@@ -265,8 +280,9 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
   }
   // A click on the dark surround, not on the page, closes.
   function onBackdropClick(e: React.MouseEvent) {
+    if (textMenu) { setTextMenu(false); return }
     if (dragged.current || commenting || editing) return
-    if ((e.target as HTMLElement).dataset.backdrop) close()
+    if (downOnBackdrop.current && (e.target as HTMLElement).dataset.backdrop) close()
   }
 
   async function saveEditing() {
@@ -296,11 +312,13 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
   const pct = img ? Math.round(view.s * 100) : null
   const showPanel = panel && (!!page.panel || canComment)
   const cursor = commenting ? 'crosshair' : fitted ? 'zoom-in' : 'grab'
-  const drawn: Array<Box & { kind: AnnotationKind; n: number; id: number | null; active: boolean }> = [
-    ...marks.map((m, i) => ({ x: m.x, y: m.y, w: m.w, h: m.h, kind: m.kind, n: i + 1, id: m.id, active: editing?.id === m.id })),
-    ...(draft ? [{ ...draft.box, kind: lastKind, n: marks.length + 1, id: null, active: true }] : []),
-    ...(editing && editing.id == null ? [{ ...editing.box, kind: editing.kind, n: marks.length + 1, id: null, active: true }] : []),
+  // While a comment is being edited its box shows the words as they are typed.
+  const drawn: Drawn[] = [
+    ...marks.map((m, i) => ({ x: m.x, y: m.y, w: m.w, h: m.h, kind: m.kind, n: i + 1, id: m.id, active: editing?.id === m.id, text: editing?.id === m.id ? editing.text : m.text })),
+    ...(draft ? [{ ...draft.box, kind: lastKind, n: marks.length + 1, id: null, active: true, text: '' }] : []),
+    ...(editing && editing.id == null ? [{ ...editing.box, kind: editing.kind, n: marks.length + 1, id: null, active: true, text: editing.text }] : []),
   ]
+  const textOn = textStyle.show ? textStyle : null
 
   return (
     <div className="viewer" role="dialog" aria-modal="true" aria-label={`${page.label}${page.sub ? `, ${page.sub}` : ''}`}>
@@ -318,6 +336,33 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
           <button className="vbtn" onClick={() => zoomCentre(1.25)} title="Zoom in (+)" aria-label="Zoom in">+</button>
           <button className="vbtn" onClick={turn} title="Turn the page (R)">Rotate</button>
           {canComment && <button className={`vbtn ${commenting ? 'on' : ''}`} onClick={() => setCommenting((c) => !c)} title="Drag a box over a spot and write a comment (C)">{commenting ? 'Commenting…' : `Comment${marks.length ? ` · ${marks.length}` : ''}`}</button>}
+          {canComment && (
+            <span style={{ position: 'relative' }}>
+              <button className={`vbtn ${textMenu ? 'on' : ''}`} onClick={() => setTextMenu((m) => !m)} title="The comment text in its box: size and font, or hide it (T)" aria-haspopup="true" aria-expanded={textMenu} style={{ textTransform: 'none', letterSpacing: 0, fontSize: 12.5 }}>Aa</button>
+              {textMenu && (
+                <div className="text-menu" role="group" aria-label="Comment text" onPointerDown={(e) => e.stopPropagation()}>
+                  <label className="row" style={{ gap: 8, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={textStyle.show} onChange={(e) => setText({ show: e.target.checked })} />
+                    <span>Show the words in the box</span>
+                  </label>
+                  <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                    <span className="over quiet" style={{ fontSize: 10, width: 44 }}>Size</span>
+                    <button type="button" className="btn" onClick={() => setText({ size: textStyle.size - SIZE_STEP })} disabled={textStyle.size <= MIN_SIZE} aria-label="Smaller text">−</button>
+                    <input type="range" min={MIN_SIZE} max={MAX_SIZE} step={SIZE_STEP} value={textStyle.size} onChange={(e) => setText({ size: Number(e.target.value) })} aria-label="Text size" style={{ flex: 1 }} />
+                    <button type="button" className="btn" onClick={() => setText({ size: textStyle.size + SIZE_STEP })} disabled={textStyle.size >= MAX_SIZE} aria-label="Larger text">+</button>
+                    <span className="small" style={{ width: 34, textAlign: 'right' }}>{textStyle.size}px</span>
+                  </div>
+                  <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                    <span className="over quiet" style={{ fontSize: 10, width: 44 }}>Font</span>
+                    {MARK_FONTS.map((f) => (
+                      <button key={f.font} type="button" className={`chip ${textStyle.font === f.font ? 'on' : ''}`} style={{ fontFamily: f.family, cursor: 'pointer' }} onClick={() => setText({ font: f.font })}>{f.label}</button>
+                    ))}
+                  </div>
+                  <div className="mark-text" style={{ position: 'static', fontSize: textStyle.size, fontFamily: fontFamily(textStyle.font), color: KIND_COLOR.fix, maxWidth: 'none' }}>she go → she goes</div>
+                </div>
+              )}
+            </span>
+          )}
           {(page.panel || canComment) && <button className="vbtn" onClick={() => setPanel((p) => !p)} title="Show or hide the notes (N)">{panel ? 'Hide notes' : 'Notes'}</button>}
           <a className="vbtn" href={page.src} target="_blank" rel="noreferrer" title="The file itself, in a new tab">File</a>
           <button className="vbtn" onClick={close} title="Close (Esc)" aria-label="Close">✕</button>
@@ -327,11 +372,11 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
         <div ref={stageRef} className="viewer-stage" data-backdrop="1" onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onDoubleClick={onDoubleClick} onClick={onBackdropClick} style={{ cursor }}>
           {page.pair ? (
             <div style={{ position: 'absolute', inset: 0, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: PAIR_GAP, padding: 0 }}>
-              <Pane src={page.src} view={view} rotate={rotate} img={img} vis={vis} onSize={setImg} marks={drawn} onMark={(id) => { const m = marks.find((x) => x.id === id); if (m) openMark(m) }} />
-              <Pane src={page.pair.src} view={view} rotate={rotate} img={img} vis={vis} onSize={null} marks={[]} onMark={() => {}} />
+              <Pane src={page.src} view={view} rotate={rotate} img={img} vis={vis} onSize={setImg} marks={drawn} text={textOn} onMark={(id) => { const m = marks.find((x) => x.id === id); if (m) openMark(m) }} />
+              <Pane src={page.pair.src} view={view} rotate={rotate} img={img} vis={vis} onSize={null} marks={[]} text={null} onMark={() => {}} />
             </div>
           ) : (
-            <Pane src={page.src} view={view} rotate={rotate} img={img} vis={vis} onSize={setImg} marks={drawn} onMark={(id) => { const m = marks.find((x) => x.id === id); if (m) openMark(m) }} />
+            <Pane src={page.src} view={view} rotate={rotate} img={img} vis={vis} onSize={setImg} marks={drawn} text={textOn} onMark={(id) => { const m = marks.find((x) => x.id === id); if (m) openMark(m) }} />
           )}
           {!img && <div className="viewer-loading">Loading</div>}
           {commenting && !editing && !draft && <div className="viewer-hint">Drag a box over the spot, or click it. Esc to stop commenting.</div>}
@@ -391,6 +436,7 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
         <span><kbd className="key">R</kbd> rotate</span>
         <span><kbd className="key">0</kbd> fit</span>
         {canComment && <span><kbd className="key">C</kbd> comment</span>}
+        {canComment && <span><kbd className="key">T</kbd> words on/off</span>}
         <span><kbd className="key">Esc</kbd> close</span>
       </div>
     </div>
@@ -400,10 +446,12 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
 // One picture inside the stage, at the shared view. The pair shares the first
 // picture's measured size, so two scans of the same sheet line up exactly.
 // Comment boxes sit in a layer that turns with the picture, in page pixels,
-// with strokes and badges scaled down so they stay thin at any zoom.
-function Pane({ src, view, rotate, img, vis, onSize, marks, onMark }: {
+// with strokes, badges and the words scaled down so they stay the same size
+// on screen at any zoom. The words sit inside the box under its number and
+// may run past the bottom of a short box rather than be cut off.
+function Pane({ src, view, rotate, img, vis, onSize, marks, text, onMark }: {
   src: string; view: View; rotate: number; img: Size | null; vis: Size | null; onSize: ((s: Size) => void) | null
-  marks: Array<Box & { kind: AnnotationKind; n: number; id: number | null; active: boolean }>; onMark: (id: number) => void
+  marks: Drawn[]; text: MarkTextStyle | null; onMark: (id: number) => void
 }) {
   const inner = { position: 'absolute' as const, left: vis && img ? (vis.w - img.w) / 2 : 0, top: vis && img ? (vis.h - img.h) / 2 : 0, width: img?.w ?? 0, height: img?.h ?? 0, transform: `rotate(${rotate}deg)` }
   const k = 1 / view.s
@@ -428,6 +476,17 @@ function Pane({ src, view, rotate, img, vis, onSize, marks, onMark }: {
                 style={{ left: m.x * img.w, top: m.y * img.h, width: m.w * img.w, height: m.h * img.h, borderColor: KIND_COLOR[m.kind], borderWidth: Math.max(1, 2 * k), background: `${KIND_COLOR[m.kind]}${m.active ? '26' : '0f'}`, boxShadow: m.active ? `0 0 0 ${3 * k}px ${KIND_COLOR[m.kind]}55` : undefined, pointerEvents: m.id != null ? 'auto' : 'none', borderRadius: 3 * k }}
               >
                 <span className="mark-n" style={{ background: KIND_COLOR[m.kind], transform: `scale(${k})`, transformOrigin: '0 0', left: -1 * k, top: -1 * k }}>{m.n}</span>
+                {text && m.text.trim() && (
+                  <div
+                    className="mark-text"
+                    style={{
+                      // In the scaled-down layer one unit is one screen pixel, so the box's screen width is its page width over k.
+                      transform: `scale(${k})`, transformOrigin: '0 0', left: 2 * k, top: 22 * k,
+                      width: Math.max(140, (m.w * img.w) / k - 4), maxWidth: Math.max(140, (img.w - m.x * img.w) / k - 4),
+                      fontSize: text.size, fontFamily: fontFamily(text.font), color: KIND_COLOR[m.kind], borderColor: `${KIND_COLOR[m.kind]}66`,
+                    }}
+                  >{m.text}</div>
+                )}
               </div>
             ))}
           </div>
