@@ -8,8 +8,10 @@
 // A page that knows its id can take comments: press C (or Comment), drag a
 // box over the spot, write the comment, pick praise, fix or note. Comments
 // are kept on the server as fractions of the page and drawn on the copy
-// Claude reads when the packet is analysed again. Each comment's words show
-// inside its box; the Aa control sets their size and face, or hides them.
+// Claude reads when the packet is analysed again. Each comment shows as one
+// label on the page: its words on a pale card the width of the box, with the
+// number on the card's corner. The Aa control sets the words' size and face,
+// or hides them; with the words hidden the box shows as an outline instead.
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode, type WheelEvent as RWheelEvent } from 'react'
 import { fitView, panBy, rotateView, toPageFraction, wheelFactor, zoomAt, type Size, type View } from './viewerMath'
 import { del, get, post, put } from '../api'
@@ -447,8 +449,12 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
 // picture's measured size, so two scans of the same sheet line up exactly.
 // Comment boxes sit in a layer that turns with the picture, in page pixels,
 // with strokes, badges and the words scaled down so they stay the same size
-// on screen at any zoom. The words sit inside the box under its number and
-// may run past the bottom of a short box rather than be cut off.
+// on screen at any zoom. A comment with words showing is drawn as a single
+// card: the words on a pale label as wide as the box, hung from the box's
+// top-left corner with the number on its corner, and no outline round the
+// box itself, so a note never looks like a window inside a window. A box
+// with no words to show (words hidden, or still being drawn) keeps a thin
+// outline with the number on its corner, so the spot is always marked.
 function Pane({ src, view, rotate, img, vis, onSize, marks, text, onMark }: {
   src: string; view: View; rotate: number; img: Size | null; vis: Size | null; onSize: ((s: Size) => void) | null
   marks: Drawn[]; text: MarkTextStyle | null; onMark: (id: number) => void
@@ -467,28 +473,36 @@ function Pane({ src, view, rotate, img, vis, onSize, marks, text, onMark }: {
         />
         {img && marks.length > 0 && (
           <div style={{ ...inner, pointerEvents: 'none' }}>
-            {marks.map((m) => (
-              <div
-                key={m.id ?? `draft-${m.n}`}
-                className="mark"
-                onPointerDown={(e) => { if (m.id != null) { e.stopPropagation(); } }}
-                onClick={(e) => { if (m.id != null) { e.stopPropagation(); onMark(m.id) } }}
-                style={{ left: m.x * img.w, top: m.y * img.h, width: m.w * img.w, height: m.h * img.h, borderColor: KIND_COLOR[m.kind], borderWidth: Math.max(1, 2 * k), background: `${KIND_COLOR[m.kind]}${m.active ? '26' : '0f'}`, boxShadow: m.active ? `0 0 0 ${3 * k}px ${KIND_COLOR[m.kind]}55` : undefined, pointerEvents: m.id != null ? 'auto' : 'none', borderRadius: 3 * k }}
-              >
-                <span className="mark-n" style={{ background: KIND_COLOR[m.kind], transform: `scale(${k})`, transformOrigin: '0 0', left: -1 * k, top: -1 * k }}>{m.n}</span>
-                {text && m.text.trim() && (
-                  <div
-                    className="mark-text"
-                    style={{
-                      // In the scaled-down layer one unit is one screen pixel, so the box's screen width is its page width over k.
-                      transform: `scale(${k})`, transformOrigin: '0 0', left: 2 * k, top: 22 * k,
-                      width: Math.max(140, (m.w * img.w) / k - 4), maxWidth: Math.max(140, (img.w - m.x * img.w) / k - 4),
-                      fontSize: text.size, fontFamily: fontFamily(text.font), color: KIND_COLOR[m.kind], borderColor: `${KIND_COLOR[m.kind]}66`,
-                    }}
-                  >{m.text}</div>
-                )}
-              </div>
-            ))}
+            {marks.map((m) => {
+              const c = KIND_COLOR[m.kind]
+              const labelled = !!text && m.text.trim() !== ''
+              const ring = m.active ? `0 0 0 ${3 * k}px ${c}55` : undefined
+              return (
+                <div
+                  key={m.id ?? `draft-${m.n}`}
+                  className="mark"
+                  onPointerDown={(e) => { if (m.id != null) { e.stopPropagation(); } }}
+                  onClick={(e) => { if (m.id != null) { e.stopPropagation(); onMark(m.id) } }}
+                  style={labelled
+                    ? { left: m.x * img.w, top: m.y * img.h, width: m.w * img.w, height: m.h * img.h, border: 'none', pointerEvents: m.id != null ? 'auto' : 'none' }
+                    : { left: m.x * img.w, top: m.y * img.h, width: m.w * img.w, height: m.h * img.h, borderColor: c, borderWidth: Math.max(1, 2 * k), background: `${c}${m.active ? '26' : '0f'}`, boxShadow: ring, pointerEvents: m.id != null ? 'auto' : 'none', borderRadius: 3 * k }}
+                >
+                  {labelled && (
+                    <div
+                      className="mark-text"
+                      style={{
+                        // In the scaled-down layer one unit is one screen pixel, so the box's screen width is its page width over k.
+                        transform: `scale(${k})`, transformOrigin: '0 0', left: 0, top: 0,
+                        width: Math.max(140, (m.w * img.w) / k), maxWidth: Math.max(140, (img.w - m.x * img.w) / k),
+                        fontSize: text!.size, fontFamily: fontFamily(text!.font), color: c, borderColor: `${c}66`, boxShadow: ring ?? '0 1px 4px rgba(0,0,0,.18)',
+                        pointerEvents: m.id != null ? 'auto' : 'none',
+                      }}
+                    >{m.text}</div>
+                  )}
+                  <span className="mark-n" style={{ background: c, transform: `scale(${k})`, transformOrigin: '0 0', left: (labelled ? -6 : -1) * k, top: (labelled ? -6 : -1) * k }}>{m.n}</span>
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
