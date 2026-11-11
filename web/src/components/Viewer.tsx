@@ -8,17 +8,20 @@
 // A page that knows its id can take comments: press C (or Comment), drag a
 // box over the spot, write the comment, pick praise, fix or note. Comments
 // are kept on the server as fractions of the page and drawn on the copy
-// Claude reads when the packet is analysed again. Each comment shows as one
-// label on the page: its words on a pale card the width of the box, with the
-// number on the card's corner. The Aa control sets the words' size and face,
-// or hides them; with the words hidden the box shows as an outline instead.
+// Claude reads when the packet is analysed again. Each comment's box is a
+// highlighter wash on the page with a number on its corner, and its words sit
+// on a card in a column beside the page, joined to the box by a line, so
+// nothing on the page is covered. The Aa control can put the words on the
+// page instead, on a card the width of the box, set their size and face, or
+// hide them; with the words hidden the box shows as an outline instead.
 // An open comment can be moved: drag its card or box, pull a handle to
 // resize, or use the arrow keys (Shift resizes). A move is saved on release.
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode, type WheelEvent as RWheelEvent } from 'react'
 import { fitView, panBy, rotateView, toPageFraction, wheelFactor, zoomAt, type Size, type View } from './viewerMath'
 import { del, get, post, put } from '../api'
 import { ANNOTATION_KINDS, clampBox, KIND_COLOR, type Annotation, type AnnotationKind } from '../../../shared/annotations'
-import { clampSize, fontFamily, loadMarkText, MARK_FONTS, MAX_SIZE, MIN_SIZE, saveMarkText, SIZE_STEP, type MarkTextStyle } from './markText'
+import { clampSize, fontFamily, loadMarkText, MARK_FONTS, MARK_PLACES, MAX_SIZE, MIN_SIZE, saveMarkText, SIZE_STEP, type MarkTextStyle } from './markText'
+import { CARD_W, COLUMN_GAP, COLUMN_W, stackCards, visualRect, type Rect } from './margin'
 import { handleAt, handleCursor, HANDLES, moveBox, nudgeBox, resizeBox, type Handle } from './boxEdit'
 
 export interface ViewerPage {
@@ -147,9 +150,11 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
 
   // A new page starts fitted and upright.
   useEffect(() => { setImg(null); setRotate(0); setFitted(true) }, [page.src])
+  // With comments in the column beside the page, the fit leaves room for it on the right.
+  const column = textStyle.show && textStyle.place === 'margin' && marks.length > 0
   useEffect(() => {
-    if (img && fitted) setView(fitView(stage, img, rotate))
-  }, [img, stage, rotate, fitted])
+    if (img && fitted) setView(fitView(column ? { w: Math.max(stage.w * 0.5, stage.w - COLUMN_W), h: stage.h } : stage, img, rotate))
+  }, [img, stage, rotate, fitted, column])
 
   // Neighbours load in the background so the arrows feel instant.
   useEffect(() => {
@@ -406,13 +411,19 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
           {canComment && <button className={`vbtn ${commenting ? 'on' : ''}`} onClick={() => setCommenting((c) => !c)} title="Drag a box over a spot and write a comment (C)">{commenting ? 'Commenting…' : `Comment${marks.length ? ` · ${marks.length}` : ''}`}</button>}
           {canComment && (
             <span style={{ position: 'relative' }}>
-              <button className={`vbtn ${textMenu ? 'on' : ''}`} onClick={() => setTextMenu((m) => !m)} title="The comment text in its box: size and font, or hide it (T)" aria-haspopup="true" aria-expanded={textMenu} style={{ textTransform: 'none', letterSpacing: 0, fontSize: 12.5 }}>Aa</button>
+              <button className={`vbtn ${textMenu ? 'on' : ''}`} onClick={() => setTextMenu((m) => !m)} title="The comment words: beside the page or on it, size and font, or hidden (T)" aria-haspopup="true" aria-expanded={textMenu} style={{ textTransform: 'none', letterSpacing: 0, fontSize: 12.5 }}>Aa</button>
               {textMenu && (
                 <div className="text-menu" role="group" aria-label="Comment text" onPointerDown={(e) => e.stopPropagation()}>
                   <label className="row" style={{ gap: 8, cursor: 'pointer' }}>
                     <input type="checkbox" checked={textStyle.show} onChange={(e) => setText({ show: e.target.checked })} />
-                    <span>Show the words in the box</span>
+                    <span>Show the words</span>
                   </label>
+                  <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                    <span className="over quiet" style={{ fontSize: 10, width: 44 }}>Where</span>
+                    {MARK_PLACES.map((pl) => (
+                      <button key={pl.place} type="button" className={`chip ${textStyle.place === pl.place ? 'on' : ''}`} style={{ cursor: 'pointer' }} title={pl.hint} onClick={() => setText({ place: pl.place })}>{pl.label}</button>
+                    ))}
+                  </div>
                   <div className="row" style={{ gap: 6, alignItems: 'center' }}>
                     <span className="over quiet" style={{ fontSize: 10, width: 44 }}>Size</span>
                     <button type="button" className="btn" onClick={() => setText({ size: textStyle.size - SIZE_STEP })} disabled={textStyle.size <= MIN_SIZE} aria-label="Smaller text">−</button>
@@ -440,11 +451,11 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
         <div ref={stageRef} className="viewer-stage" data-backdrop="1" onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onDoubleClick={onDoubleClick} onClick={onBackdropClick} style={{ cursor }}>
           {page.pair ? (
             <div style={{ position: 'absolute', inset: 0, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: PAIR_GAP, padding: 0 }}>
-              <Pane src={page.src} view={view} rotate={rotate} img={img} vis={vis} onSize={setImg} marks={drawn} text={textOn} onMark={(id) => { const m = marks.find((x) => x.id === id); if (m) openMark(m) }} onBoxDown={onBoxDown} />
-              <Pane src={page.pair.src} view={view} rotate={rotate} img={img} vis={vis} onSize={null} marks={[]} text={null} onMark={() => {}} onBoxDown={() => {}} />
+              <Pane src={page.src} view={view} rotate={rotate} img={img} vis={vis} pane={stage} onSize={setImg} marks={drawn} text={textOn} onMark={(id) => { const m = marks.find((x) => x.id === id); if (m) openMark(m) }} onBoxDown={onBoxDown} />
+              <Pane src={page.pair.src} view={view} rotate={rotate} img={img} vis={vis} pane={stage} onSize={null} marks={[]} text={null} onMark={() => {}} onBoxDown={() => {}} />
             </div>
           ) : (
-            <Pane src={page.src} view={view} rotate={rotate} img={img} vis={vis} onSize={setImg} marks={drawn} text={textOn} onMark={(id) => { const m = marks.find((x) => x.id === id); if (m) openMark(m) }} onBoxDown={onBoxDown} />
+            <Pane src={page.src} view={view} rotate={rotate} img={img} vis={vis} pane={stage} onSize={setImg} marks={drawn} text={textOn} onMark={(id) => { const m = marks.find((x) => x.id === id); if (m) openMark(m) }} onBoxDown={onBoxDown} />
           )}
           {!img && <div className="viewer-loading">Loading</div>}
           {commenting && !editing && !draft && <div className="viewer-hint">Drag a box over the spot, or click it. Esc to stop commenting.</div>}
@@ -515,21 +526,47 @@ function Overlay({ pages, index, setIndex, close }: { pages: ViewerPage[]; index
 // picture's measured size, so two scans of the same sheet line up exactly.
 // Comment boxes sit in a layer that turns with the picture, in page pixels,
 // with strokes, badges and the words scaled down so they stay the same size
-// on screen at any zoom. A comment with words showing is drawn as a single
-// card: the words on a pale label as wide as the box, hung from the box's
-// top-left corner with the number on its corner, and no outline round the
-// box itself, so a note never looks like a window inside a window. A box
-// with no words to show (words hidden, or still being drawn) keeps a thin
-// outline with the number on its corner, so the spot is always marked. The
-// open comment shows its box as a dashed outline with eight handles; a
-// press on its card or box starts a move, a press on a handle a resize,
-// and while it is dragged the card fades so the page beneath can be read.
-function Pane({ src, view, rotate, img, vis, onSize, marks, text, onMark, onBoxDown }: {
-  src: string; view: View; rotate: number; img: Size | null; vis: Size | null; onSize: ((s: Size) => void) | null
+// on screen at any zoom.
+//
+// With the words beside the page (the default), each box is a highlighter
+// wash with its number on the corner, and its words sit on a card in a
+// column to the right of the page, level with the box where it can be and
+// pushed down below the card above where it cannot, joined to the box by a
+// thin line. The column is laid out on screen, not on the page: it works
+// from where each box is seen, so a turned page still has its cards upright,
+// and when the page is zoomed so its right edge leaves the pane the column
+// stays pinned at the pane's edge, where the words can still be read beside
+// the line they are about. With the words on the page, a comment is one card the width of its
+// box, hung from the box's top-left corner, and no outline round the box.
+// A box with no words to show (words hidden, or still being drawn) keeps a
+// thin outline. The open comment shows its box dashed with eight handles; a
+// press on it starts a move, a press on a handle a resize, and while it is
+// dragged a card on the page fades so the page beneath can be read.
+function Pane({ src, view, rotate, img, vis, pane, onSize, marks, text, onMark, onBoxDown }: {
+  src: string; view: View; rotate: number; img: Size | null; vis: Size | null; pane: Size; onSize: ((s: Size) => void) | null
   marks: Drawn[]; text: MarkTextStyle | null; onMark: (id: number) => void; onBoxDown: (mode: 'move' | Handle, e: RPointerEvent) => void
 }) {
   const inner = { position: 'absolute' as const, left: vis && img ? (vis.w - img.w) / 2 : 0, top: vis && img ? (vis.h - img.h) / 2 : 0, width: img?.w ?? 0, height: img?.h ?? 0, transform: `rotate(${rotate}deg)` }
   const k = 1 / view.s
+  const onPage = !!text && text.place === 'page'
+  const inColumn = !!text && text.place === 'margin'
+  // The cards' heights on screen, measured once drawn, so the column can stack them without overlap.
+  const heights = useRef(new Map<string, number>())
+  const [, remeasured] = useState(0)
+  const measure = (key: string) => (el: HTMLDivElement | null) => {
+    if (!el) return
+    const h = el.offsetHeight
+    if (heights.current.get(key) !== h) { heights.current.set(key, h); remeasured((n) => n + 1) }
+  }
+  const keyOf = (m: Drawn) => (m.id != null ? String(m.id) : `draft-${m.n}`)
+  // The comments that get a card in the column: those with words, or the open one while its words are typed.
+  // Boxes are taken to screen pixels in the pane, and the cards stack there.
+  const toScreen = (r: Rect): Rect => ({ x: r.x * view.s + view.x, y: r.y * view.s + view.y, w: r.w * view.s, h: r.h * view.s })
+  const carded = inColumn && img && vis ? marks.filter((m) => m.edit || m.text.trim() !== '').map((m) => ({ m, key: keyOf(m), rect: toScreen(visualRect(m, img, rotate)) })) : []
+  const tops = stackCards(carded.map((c) => ({ want: c.rect.y, height: heights.current.get(c.key) ?? 40 })))
+  // The column sits just right of the page, or at the pane's edge once the page's edge has gone past it.
+  const pageRight = (vis?.w ?? 0) * view.s + view.x
+  const colX = Math.min(pageRight + COLUMN_GAP, pane.w - CARD_W - COLUMN_GAP)
   return (
     <div style={{ position: 'relative', overflow: 'hidden', width: '100%', height: '100%' }} data-backdrop="1">
       <div style={{ position: 'absolute', left: 0, top: 0, width: vis?.w ?? 0, height: vis?.h ?? 0, transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})`, transformOrigin: '0 0', willChange: 'transform', visibility: img ? 'visible' : 'hidden' }}>
@@ -544,19 +581,25 @@ function Pane({ src, view, rotate, img, vis, onSize, marks, text, onMark, onBoxD
           <div style={{ ...inner, pointerEvents: 'none' }}>
             {marks.map((m) => {
               const c = KIND_COLOR[m.kind]
-              const labelled = !!text && m.text.trim() !== ''
+              const words = m.text.trim() !== ''
+              const labelled = onPage && words
+              const washed = inColumn && words
               const ring = m.active ? `0 0 0 ${3 * k}px ${c}55` : undefined
               const bw = m.w * img.w, bh = m.h * img.h
               const hit = m.id != null || m.edit
+              const base = { left: m.x * img.w, top: m.y * img.h, width: bw, height: bh, pointerEvents: hit ? ('auto' as const) : ('none' as const) }
+              const style = labelled
+                ? { ...base, border: m.edit ? `${Math.max(1, 1.5 * k)}px dashed ${c}` : 'none' }
+                : washed
+                  ? { ...base, border: m.edit ? `${Math.max(1, 1.5 * k)}px dashed ${c}` : 'none', background: `${c}${m.active ? '40' : '2e'}`, boxShadow: ring, borderRadius: 2 * k }
+                  : { ...base, borderColor: c, borderWidth: Math.max(1, 2 * k), borderStyle: m.edit ? 'dashed' : 'solid', background: `${c}${m.active ? '26' : '0f'}`, boxShadow: ring, borderRadius: 3 * k }
               return (
                 <div
-                  key={m.id ?? `draft-${m.n}`}
+                  key={keyOf(m)}
                   className={`mark ${m.edit ? 'edit' : ''}`}
                   onPointerDown={(e) => { if (m.edit) onBoxDown('move', e); else if (m.id != null) e.stopPropagation() }}
                   onClick={(e) => { if (m.edit) e.stopPropagation(); else if (m.id != null) { e.stopPropagation(); onMark(m.id) } }}
-                  style={labelled
-                    ? { left: m.x * img.w, top: m.y * img.h, width: bw, height: bh, border: m.edit ? `${Math.max(1, 1.5 * k)}px dashed ${c}` : 'none', pointerEvents: hit ? 'auto' : 'none' }
-                    : { left: m.x * img.w, top: m.y * img.h, width: bw, height: bh, borderColor: c, borderWidth: Math.max(1, 2 * k), borderStyle: m.edit ? 'dashed' : 'solid', background: `${c}${m.active ? '26' : '0f'}`, boxShadow: ring, pointerEvents: hit ? 'auto' : 'none', borderRadius: 3 * k }}
+                  style={style}
                 >
                   {labelled && (
                     <div
@@ -564,7 +607,7 @@ function Pane({ src, view, rotate, img, vis, onSize, marks, text, onMark, onBoxD
                       style={{
                         // In the scaled-down layer one unit is one screen pixel, so the box's screen width is its page width over k.
                         transform: `scale(${k})`, transformOrigin: '0 0', left: 0, top: 0,
-                        width: Math.max(140, (m.w * img.w) / k), maxWidth: Math.max(140, (img.w - m.x * img.w) / k),
+                        width: Math.max(140, bw / k), maxWidth: Math.max(140, (img.w - m.x * img.w) / k),
                         fontSize: text!.size, fontFamily: fontFamily(text!.font), color: c, borderColor: `${c}66`, boxShadow: ring ?? '0 1px 4px rgba(0,0,0,.18)',
                         pointerEvents: hit ? 'auto' : 'none', opacity: m.lifted ? 0.35 : 1,
                       }}
@@ -588,6 +631,35 @@ function Pane({ src, view, rotate, img, vis, onSize, marks, text, onMark, onBoxD
           </div>
         )}
       </div>
+      {carded.length > 0 && (
+        <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
+          <svg style={{ position: 'absolute', left: 0, top: 0 }} width={pane.w} height={pane.h} aria-hidden="true">
+            {carded.map(({ m, key, rect }, i) => {
+              const c = KIND_COLOR[m.kind]
+              // From the box's right edge, a little below its top, out to a channel before the column and along to the card beside its number.
+              const y0 = rect.y + Math.min(rect.h / 2, 10), y1 = tops[i] + 12
+              const x0 = Math.min(rect.x + rect.w, colX - 4), xc = colX - COLUMN_GAP * 0.5
+              return <polyline key={key} points={`${x0},${y0} ${xc},${y0} ${xc},${y1} ${colX},${y1}`} fill="none" stroke={c} strokeWidth={1.25} strokeOpacity={m.active ? 1 : 0.7} />
+            })}
+          </svg>
+          {carded.map(({ m, key }, i) => {
+            const c = KIND_COLOR[m.kind]
+            return (
+              <div
+                key={key}
+                ref={measure(key)}
+                className={`mark-card ${m.active ? 'on' : ''}`}
+                onPointerDown={(e) => { if (m.id != null) e.stopPropagation() }}
+                onClick={(e) => { if (m.id != null && !m.edit) { e.stopPropagation(); onMark(m.id) } }}
+                style={{ left: colX, top: tops[i], width: CARD_W, fontSize: text!.size, fontFamily: fontFamily(text!.font), color: c, borderColor: m.active ? c : `${c}66`, boxShadow: m.active ? `0 0 0 3px ${c}44, 0 2px 8px rgba(0,0,0,.25)` : '0 1px 4px rgba(0,0,0,.2)', pointerEvents: m.id != null ? 'auto' : 'none' }}
+              >
+                <span className="mark-card-n" style={{ background: c }}>{m.n}</span>
+                {m.text.trim() ? m.text : <span style={{ opacity: 0.5 }}>…</span>}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

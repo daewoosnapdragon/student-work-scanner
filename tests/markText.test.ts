@@ -8,7 +8,9 @@ describe('the comment text style', () => {
     expect(parseMarkText('not json')).toEqual(DEFAULT_MARK_TEXT)
   })
   it('reads what was stored, field by field', () => {
-    expect(parseMarkText('{"show":false,"size":18,"font":"hand"}')).toEqual({ show: false, size: 18, font: 'hand' })
+    expect(parseMarkText('{"show":false,"size":18,"font":"hand"}')).toEqual({ show: false, place: 'margin', size: 18, font: 'hand' })
+    expect(parseMarkText({ place: 'page' })).toEqual({ ...DEFAULT_MARK_TEXT, place: 'page' })
+    expect(parseMarkText({ place: 'ceiling' })).toEqual(DEFAULT_MARK_TEXT)
     expect(parseMarkText({ size: 20 })).toEqual({ ...DEFAULT_MARK_TEXT, size: 20 })
     expect(parseMarkText({ font: 'wingdings', show: 'yes' })).toEqual(DEFAULT_MARK_TEXT)
   })

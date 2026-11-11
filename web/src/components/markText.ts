@@ -1,12 +1,16 @@
-// How the comment text is drawn inside its box on the page: whether at all,
-// how big, and in which face. The choice is the teacher's, kept in the
-// browser, and the same for every page. Sizes are screen pixels: the text
-// stays readable at any zoom instead of growing and shrinking with the scan.
+// How the comment text is drawn: whether at all, where (in a column beside
+// the page, joined to its box by a line, or on the page in its box), how
+// big, and in which face. The choice is the teacher's, kept in the browser,
+// and the same for every page. Sizes are screen pixels: the text stays
+// readable at any zoom instead of growing and shrinking with the scan.
 
 export type MarkFont = 'sans' | 'serif' | 'hand' | 'mono'
+/** Beside the page in a column, or on the page in the box. */
+export type MarkPlace = 'margin' | 'page'
 
 export interface MarkTextStyle {
   show: boolean
+  place: MarkPlace
   size: number
   font: MarkFont
 }
@@ -14,7 +18,14 @@ export interface MarkTextStyle {
 export const MIN_SIZE = 9
 export const MAX_SIZE = 32
 export const SIZE_STEP = 1
-export const DEFAULT_MARK_TEXT: MarkTextStyle = { show: true, size: 13, font: 'sans' }
+export const DEFAULT_MARK_TEXT: MarkTextStyle = { show: true, place: 'margin', size: 13, font: 'sans' }
+export const MARK_PLACES: Array<{ place: MarkPlace; label: string; hint: string }> = [
+  { place: 'margin', label: 'Beside the page', hint: 'The words in a column to the right, each joined to its spot by a line. Nothing on the page is covered.' },
+  { place: 'page', label: 'On the page', hint: 'The words on a card at the spot itself, over the page.' },
+]
+export function isMarkPlace(p: unknown): p is MarkPlace {
+  return p === 'margin' || p === 'page'
+}
 
 export const MARK_FONTS: Array<{ font: MarkFont; label: string; family: string }> = [
   { font: 'sans', label: 'Sans', family: "'IBM Plex Sans','Noto Sans KR',system-ui,sans-serif" },
@@ -46,6 +57,7 @@ export function parseMarkText(raw: unknown): MarkTextStyle {
   const r = o as Record<string, unknown>
   return {
     show: typeof r.show === 'boolean' ? r.show : DEFAULT_MARK_TEXT.show,
+    place: isMarkPlace(r.place) ? r.place : DEFAULT_MARK_TEXT.place,
     size: clampSize(r.size),
     font: isMarkFont(r.font) ? r.font : DEFAULT_MARK_TEXT.font,
   }
