@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { del, post, useFetch, fmtDate, type Assignment } from '../api'
+import { del, post, useFetch, fmtDate, sideLabel, type Assignment } from '../api'
+import { parseExpect } from '../../../shared/types'
 
 interface Row extends Assignment { turnedIn: number; complete: number; roster: number }
 
@@ -11,6 +12,10 @@ export default function Assignments() {
   const [form, setForm] = useState({ code: '', title: '', klass: '', grade: '', assignedOn: new Date().toISOString().slice(0, 10), sheets: 1, twoSided: true, tags: '' })
   const [err, setErr] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
+  // printed from Worksheet Studio and nothing scanned yet: out of the list until a page arrives, so a set never collected leaves no gap
+  const [showWaiting, setShowWaiting] = useState(false)
+  const waiting = data?.filter((a) => a.waiting) ?? []
+  const shown = data?.filter((a) => showWaiting || !a.waiting)
 
   async function remove(a: Row) {
     if (a.turnedIn > 0) return setErr(`${a.code} has work from ${a.turnedIn} student${a.turnedIn === 1 ? '' : 's'} filed under it, so it stays.`)
@@ -50,21 +55,22 @@ export default function Assignments() {
         <table>
           <thead><tr><th style={{ width: 70 }}>Code</th><th>Title</th><th>Class</th><th style={{ width: 100 }}>Assigned</th><th style={{ width: 120 }}>Sides</th><th style={{ width: 120 }}>Turned in</th><th style={{ width: 100 }}>Complete</th><th style={{ width: 210 }}></th></tr></thead>
           <tbody>
-            {data?.map((a) => (
-              <tr key={a.code}>
+            {shown?.map((a) => (
+              <tr key={a.code} style={a.waiting ? { opacity: 0.6 } : undefined}>
                 <td className="muted">{a.code}</td>
                 <td><Link to={`/assignments/${a.code}`} className="name">{a.title}</Link>{a.tags && <div className="kr">{a.tags}</div>}</td>
                 <td>{a.klass}{a.grade != null && <span className="muted"> · G{a.grade}</span>}</td>
                 <td className="muted">{fmtDate(a.assignedOn)}</td>
-                <td>{a.sheets} sheet{a.sheets === 1 ? '' : 's'}{a.twoSided ? ', both sides' : ''}</td>
-                <td>{a.turnedIn} of {a.roster}</td>
+                <td>{a.sheets} sheet{a.sheets === 1 ? '' : 's'}{a.twoSided ? ', both sides' : ''}{a.expect && <div className="muted small">{parseExpect(a.expect).map((e) => sideLabel(e.page, e.side)).join(', ')} back</div>}</td>
+                <td>{a.waiting ? <span className="muted">printed, nothing scanned yet</span> : <>{a.turnedIn} of {a.roster}</>}</td>
                 <td>{a.complete}</td>
                 <td className="row"><Link to={`/assignments/${a.code}`} className="btn">Open</Link><a className="btn" href={`/print/labels/${a.code}`} target="_blank" rel="noreferrer">Labels</a>{a.turnedIn === 0 && <button className="btn" onClick={() => void remove(a)} title="Delete this assignment. Only possible while nothing has been scanned for it.">Delete</button>}</td>
               </tr>
             ))}
-            {data && data.length === 0 && <tr><td colSpan={8} className="muted">No assignments yet. Add the first one below.</td></tr>}
+            {shown && shown.length === 0 && <tr><td colSpan={8} className="muted">{waiting.length ? 'Nothing scanned yet.' : 'No assignments yet. Add the first one below.'}</td></tr>}
           </tbody>
         </table>
+        {waiting.length > 0 && <p className="muted small" style={{ marginTop: 8 }}>{waiting.length} printed from Worksheet Studio with nothing scanned yet ({waiting.map((a) => a.code).join(', ')}): {showWaiting ? 'shown faint above.' : 'kept out of the list until a page arrives.'} <button className="lnk" onClick={() => setShowWaiting((v) => !v)} style={{ border: 0, background: 'none', color: 'var(--accent)', padding: 0, font: 'inherit', textDecoration: 'underline', cursor: 'pointer' }}>{showWaiting ? 'Hide them' : 'Show them'}</button></p>}
       </section>
 
       <section className="col sep">

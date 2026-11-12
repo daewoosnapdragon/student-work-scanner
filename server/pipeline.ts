@@ -224,9 +224,11 @@ export function skipAllInReview(notWork = false): number {
 
 // Packets that stopped arriving --------------------------------------------
 
+// Only once a side that was waited for has arrived: a packet holding nothing
+// but pages that stay with the student has not started.
 export function stalePackets(now = Date.now()) {
   const cutoff = now - INCOMPLETE_AFTER_MIN * 60_000
-  return openPackets().filter((p) => Date.parse(p.lastAt) < cutoff)
+  return openPackets().filter((p) => p.sides > 0 && Date.parse(p.lastAt) < cutoff)
 }
 
 function duplicateOf(ref: PageRef): Page | undefined {

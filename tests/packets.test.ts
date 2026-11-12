@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { closePacketIncomplete, getPacket, insertPage, nextSeq, openDb, refreshPacket, upsertAssignment, upsertStudent } from '../server/db.js'
+import { closePacketIncomplete, getAssignment, getPacket, insertPage, nextSeq, openDb, refreshPacket, upsertAssignment, upsertStudent } from '../server/db.js'
 import { guessesFor } from '../server/guesses.js'
 import type { Page, Side } from '../shared/types.js'
 
@@ -46,6 +46,23 @@ describe('packets', () => {
     filed('S03', 'W23', 1, 'a')
     filed('S03', 'W23', 1, 'a')
     expect(getPacket('S03', 'W23')!.sides).toBe(1)
+  })
+  it('waits only for the sides that come back, when some stay with the student', () => {
+    // two sheets both sides, but the backs are reading pages: only 1 front and 2 front come back
+    upsertAssignment({ code: 'W24', title: 'Country Report', klass: 'Daisy', grade: 3, assignedOn: null, sheets: 2, twoSided: 1, tags: '', notes: null, expect: '1a,2a' })
+    filed('S03', 'W24', 1, 'a')
+    expect(getPacket('S03', 'W24')).toMatchObject({ sides: 1, expected: 2, complete: 0 })
+    // a reading page scanned anyway is kept with the packet but not counted
+    filed('S03', 'W24', 1, 'b')
+    expect(getPacket('S03', 'W24')).toMatchObject({ sides: 1, expected: 2, complete: 0 })
+    filed('S03', 'W24', 2, 'a')
+    expect(getPacket('S03', 'W24')).toMatchObject({ sides: 2, expected: 2, complete: 1 })
+  })
+  it('an assignment Worksheet Studio registered waits, out of sight, until its first page is scanned', () => {
+    upsertAssignment({ code: 'W25', title: 'Leader Traits', klass: 'Daisy', grade: 3, assignedOn: null, sheets: 1, twoSided: 0, tags: '', notes: null, waiting: 1 })
+    expect(getAssignment('W25')!.waiting).toBe(1)
+    filed('S07', 'W25', 1, 'a')
+    expect(getAssignment('W25')!.waiting).toBe(0)
   })
   it('can be closed as incomplete and stays closed on refresh', () => {
     filed('S04', 'W23', 1, 'a')

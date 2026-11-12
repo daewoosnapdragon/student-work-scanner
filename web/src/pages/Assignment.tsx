@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { post, useFetch, fmtDate, fileUrl, sideLabel, type Assignment, type Packet, type Page, type Student } from '../api'
-import { parseCorrectionLines, parseCorrections, parseCriteria, type Anchor, type Rubric } from '../../../shared/types'
+import { formatExpect, parseCorrectionLines, parseCorrections, parseCriteria, parseExpect, type Anchor, type Rubric, type Side } from '../../../shared/types'
 import { del, put } from '../api'
 import ProgressRow from '../components/ProgressRow'
 import { ScanLink, type ViewerPage } from '../components/Viewer'
@@ -9,7 +9,7 @@ import AgreementCard, { type Agreement } from '../components/AgreementCard'
 
 interface Row extends Student { packet: Packet | null; pages: Page[] }
 interface Rating { student: string; assignment: string; domain: string; level: number; note: string | null; claudeLevel: number | null; by: 'claude' | 'teacher' | null }
-interface Data { assignment: Assignment; expected: number; students: Row[]; inReview: number; average: number | null; scoredCount: number; noticing: { text: string; at: string } | null; analysisOn: boolean; domains: string[]; allDomains: string[]; rubric: Rubric; ratings: Rating[]; anchors: Anchor[]; agreement: Agreement }
+interface Data { assignment: Assignment; expected: number; /** Every side printed, whether or not it comes back. */ printed: Array<{ page: number; side: Side }>; students: Row[]; inReview: number; average: number | null; scoredCount: number; noticing: { text: string; at: string } | null; analysisOn: boolean; domains: string[]; allDomains: string[]; rubric: Rubric; ratings: Rating[]; anchors: Anchor[]; agreement: Agreement }
 const LEVEL_NAME: Record<number, string> = { 4: 'Strong', 3: 'Secure', 2: 'Developing', 1: 'Beginning' }
 const LEVEL_BG: Record<number, string> = { 4: '#dff0e5', 3: '#eef5e9', 2: '#fff3d6', 1: '#f8dcd8' }
 const shortDomain = (d: string) => d.split(':')[0].trim()
@@ -54,7 +54,7 @@ export default function AssignmentPage() {
         <div className="over"><Link to="/assignments">Assignments</Link> <span className="muted">/</span> {a.code}</div>
         <h1 className="serif title">{a.title}</h1>
         <p className="serif" style={{ margin: 0, fontSize: 17, fontStyle: 'italic', color: 'var(--ink2)' }}>
-          {[a.code, a.grade != null && `Grade ${a.grade}`, a.klass, a.assignedOn && `assigned ${fmtDate(a.assignedOn)}`, `${a.sheets} sheet${a.sheets === 1 ? '' : 's'}${a.twoSided ? ', both sides' : ''}`].filter(Boolean).join(' · ')}
+          {[a.code, a.grade != null && `Grade ${a.grade}`, a.klass, a.assignedOn && `assigned ${fmtDate(a.assignedOn)}`, `${a.sheets} sheet${a.sheets === 1 ? '' : 's'}${a.twoSided ? ', both sides' : ''}`, a.expect && `${parseExpect(a.expect).map((e) => sideLabel(e.page, e.side)).join(' and ')} come${parseExpect(a.expect).length === 1 ? 's' : ''} back`].filter(Boolean).join(' · ')}
         </p>
         <div className="row">
           {a.tags && <><span className="over quiet" style={{ fontSize: 10, marginRight: 4 }}>Tags</span>{a.tags.split(',').map((t) => t.trim()).filter(Boolean).map((t) => <span key={t} className="chip">{t}</span>)}</>}
@@ -62,7 +62,7 @@ export default function AssignmentPage() {
           <a className="btn" href={`/print/labels/${a.code}`} target="_blank" rel="noreferrer">Print labels</a>
           <Link className="btn" to={`/compare?assignment=${a.code}`}>Compare</Link>
         </div>
-        {editing && <EditForm a={a} onDone={() => { setEditing(false); setBump((b) => b + 1) }} />}
+        {editing && <EditForm a={a} printed={data.printed} onDone={() => { setEditing(false); setBump((b) => b + 1) }} />}
       </section>
 
       <section className="stats">
@@ -408,15 +408,25 @@ function ScoreTable({ rows }: { rows: Row[] }) {
 }
 
 
-function EditForm({ a, onDone }: { a: Assignment; onDone: () => void }) {
+function EditForm({ a, printed, onDone }: { a: Assignment; printed: Array<{ page: number; side: Side }>; onDone: () => void }) {
   const [f, setF] = useState({ title: a.title, klass: a.klass, grade: a.grade == null ? '' : String(a.grade), assignedOn: a.assignedOn ?? '', sheets: a.sheets, twoSided: !!a.twoSided, sides: a.sides == null ? '' : String(a.sides), tags: a.tags })
+  // which printed sides come back to be scanned; all of them unless some were unticked (a reading page stays with the student)
+  const [back, setBack] = useState<Set<string>>(() => new Set((parseExpect(a.expect).length ? parseExpect(a.expect) : printed).map((e) => `${e.page}${e.side}`)))
   const [err, setErr] = useState<string | null>(null)
   const { data: classes } = useFetch<{ classes: string[] }>('/api/students')
   const max = f.sheets * (f.twoSided ? 2 : 1)
+  // the sides as the form now has them: sheets × sides, capped by "sides in all"
+  const sidesNow: Array<{ page: number; side: Side }> = []
+  for (let p = 1; p <= Math.max(1, f.sheets); p++) { sidesNow.push({ page: p, side: 'a' }); if (f.twoSided) sidesNow.push({ page: p, side: 'b' }) }
+  const cap = f.sides === '' ? sidesNow.length : Number(f.sides)
+  const choosable = cap > 0 && cap < sidesNow.length ? sidesNow.slice(0, cap) : sidesNow
+  const allBack = choosable.every((e) => back.has(`${e.page}${e.side}`))
   async function save() {
     try {
       setErr(null)
-      await fetch(`/api/assignments/${a.code}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...f, grade: f.grade === '' ? null : Number(f.grade), sides: f.sides === '' ? null : Number(f.sides) }) }).then(async (r) => { if (!r.ok) throw new Error((await r.json()).error ?? r.statusText) })
+      const expect = allBack ? null : choosable.filter((e) => back.has(`${e.page}${e.side}`)).map((e) => `${e.page}${e.side}`)
+      if (expect && expect.length === 0) throw new Error('Tick at least one side that comes back.')
+      await fetch(`/api/assignments/${a.code}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...f, grade: f.grade === '' ? null : Number(f.grade), sides: f.sides === '' ? null : Number(f.sides), expect: formatExpect(expect) }) }).then(async (r) => { if (!r.ok) throw new Error((await r.json()).error ?? r.statusText) })
       onDone()
     } catch (e) {
       setErr((e as Error).message)
@@ -437,6 +447,15 @@ function EditForm({ a, onDone }: { a: Assignment; onDone: () => void }) {
         <label className="col" style={{ gap: 4 }} title="Only when fewer sides are actually used than sheets × sides, such as 2 sheets both sides but the last back blank: 3"><span className="over quiet" style={{ fontSize: 10 }}>Sides in all</span><input type="number" min={1} max={max} value={f.sides} placeholder={String(max)} onChange={(e) => setF({ ...f, sides: e.target.value })} style={{ width: 80 }} /></label>
         <label className="col" style={{ gap: 4, flex: 1 }}><span className="over quiet" style={{ fontSize: 10 }}>Tags</span><input type="text" value={f.tags} onChange={(e) => setF({ ...f, tags: e.target.value })} /></label>
       </div>
+      {choosable.length > 1 && (
+        <div className="col" style={{ gap: 4 }} title="Untick a side that stays with the student, such as a reading page. The scanner then waits only for the ticked ones, and a packet is complete when they are in.">
+          <span className="over quiet" style={{ fontSize: 10 }}>Comes back to be scanned</span>
+          <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+            {choosable.map((e) => { const k = `${e.page}${e.side}`; return <label key={k} className="row" style={{ gap: 4 }}><input type="checkbox" checked={back.has(k)} onChange={(ev) => setBack((prev) => { const n = new Set(prev); if (ev.target.checked) n.add(k); else n.delete(k); return n })} /> {sideLabel(e.page, e.side)}</label> })}
+          </div>
+          {!allBack && <div className="muted small">The other sides are kept if they are scanned, but not waited for.</div>}
+        </div>
+      )}
       {err && <p className="err" style={{ margin: 0 }}>{err}</p>}
       <div className="row"><button type="submit" className="btn primary">Save</button><button type="button" className="btn" onClick={onDone}>Cancel</button></div>
     </form>

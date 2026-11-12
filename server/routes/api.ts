@@ -5,7 +5,7 @@ import QRCode from 'qrcode'
 import {
   allPackets, expectedFor, findStudentsByName, getAssignment, getPacket, getStudent, listAssignments, listStudents,
   packetPages, packetsForAssignment, packetsForStudent, pagesForStudent, pagesSince, recentPages, reviewPages,
-  setPacketScore, upsertAssignment, upsertStudent, closePacketIncomplete, getPage, getMeta, metaWithPrefix, sidesFor, deleteAssignment,
+  setPacketScore, upsertAssignment, upsertStudent, closePacketIncomplete, getPage, getMeta, metaWithPrefix, sidesFor, printedSidesFor, deleteAssignment,
   refreshPacketsFor, setAssignmentAnalysis, setPacketFeedback,
 } from '../db.js'
 import { broadcast, subscribe } from '../events.js'
@@ -21,7 +21,7 @@ import { annotationsText, clampBox, isKind } from '../../shared/annotations.js'
 import { canonicalSkill, skillVocabulary } from '../skills.js'
 import { historyText, latestLevels, studentHistory } from '../history.js'
 import { skillGroups } from '../../shared/skills.js'
-import { parseCorrectionLines, parseCorrections, parseCriteria, parseProgress, parseRubric, progressDirection, DEFAULT_RUBRIC, SKILL_LEVEL_LABEL, type Rubric } from '../../shared/types.js'
+import { formatExpect, parseCorrectionLines, parseCorrections, parseCriteria, parseProgress, parseRubric, progressDirection, DEFAULT_RUBRIC, SKILL_LEVEL_LABEL, type Rubric } from '../../shared/types.js'
 import { watcherStatus } from '../watcher.js'
 import { formatCode, sideLabel } from '../codes.js'
 import type { Assignment, ReviewItem, Side, Student } from '../../shared/types.js'
@@ -95,7 +95,7 @@ function decorate(p: ReturnType<typeof recentPages>[number], students: Map<strin
 // Assignments with students who have not turned anything in yet, newest first.
 function outstanding() {
   const out: Array<{ assignment: Assignment; missing: Student[]; total: number }> = []
-  for (const a of listAssignments().slice(0, 6)) {
+  for (const a of listAssignments().filter((a) => !a.waiting).slice(0, 6)) {
     const roster = listStudents(a.klass).filter((s) => s.active && (a.grade == null || s.grade == null || s.grade === a.grade))
     const have = new Set(packetsForAssignment(a.code).map((p) => p.student))
     out.push({ assignment: a, missing: roster.filter((s) => !have.has(s.code)), total: roster.length })
@@ -110,7 +110,7 @@ api.get('/students', (req, res) => {
   const rows = students.map((s) => {
     const packets = packetsForStudent(s.code)
     const last = packets[0]?.lastAt ?? null
-    const missing = listAssignments().filter((a) => a.klass === s.klass && (a.grade == null || s.grade == null || a.grade === s.grade) && !getPacket(s.code, a.code)).length
+    const missing = listAssignments().filter((a) => !a.waiting && a.klass === s.klass && (a.grade == null || s.grade == null || a.grade === s.grade) && !getPacket(s.code, a.code)).length
     return { ...s, samples: packets.length, lastScanned: last, missing }
   })
   const classes = [...new Set(listStudents().map((s) => s.klass))].sort()
@@ -133,7 +133,7 @@ api.get('/students/:code', (req, res) => {
   const s = getStudent(req.params.code.toUpperCase())
   if (!s) return res.status(404).json({ error: 'no such student' })
   const packets = packetsForStudent(s.code).map((p) => ({ ...p, assignmentInfo: getAssignment(p.assignment) ?? null, pages: withAnnotationCounts(packetPages(p.student, p.assignment)) }))
-  const assigned = listAssignments().filter((a) => a.klass === s.klass && (a.grade == null || s.grade == null || a.grade === s.grade))
+  const assigned = listAssignments().filter((a) => !a.waiting && a.klass === s.klass && (a.grade == null || s.grade == null || a.grade === s.grade))
   const missing = assigned.filter((a) => !getPacket(s.code, a.code))
   res.json({ student: s, packets, missing, pages: withAnnotationCounts(pagesForStudent(s.code)), skills: skillsForStudent(s.code), ratings: domainsForStudent(s.code), domains: domainList(), skillGroups: Object.fromEntries(skillVocabulary().map((d) => [d.name, d.group])) })
 })
@@ -153,11 +153,15 @@ api.post('/assignments', (req, res) => {
   if (!b.code || !b.title || !b.klass) return res.status(400).json({ error: 'code, title and class are required' })
   const code = String(b.code).toUpperCase()
   const before = getAssignment(code)
+  // Worksheet Studio registers a set as it prints (`waiting`): the assignment stays out of the lists until a page of it is scanned,
+  // so a set printed and never collected leaves no gap. Once pages exist it is real whatever the caller says.
+  const waiting = b.waiting && packetsForAssignment(code).length === 0 ? 1 : 0
   upsertAssignment({
     code, title: b.title, klass: b.klass, grade: b.grade ?? null, assignedOn: b.assignedOn ?? null,
     sheets: Number(b.sheets ?? 1), twoSided: b.twoSided ? 1 : 0, tags: b.tags ?? '', notes: b.notes ?? null,
-    sides: b.sides == null ? null : Number(b.sides),
+    sides: b.sides == null ? null : Number(b.sides), expect: expectFromBody(b.expect), waiting,
   })
+  refreshPacketsFor(code)
   // a rubric seed from Worksheet Studio (the worksheet's objective and skill) fills a rubric the teacher has not written yet
   if (b.rubric && typeof b.rubric === 'object' && !before?.rubric) setAssignmentRubric(code, JSON.stringify(cleanRubric(b.rubric)))
   res.json(getAssignment(code))
@@ -174,10 +178,18 @@ api.put('/assignments/:code', (req, res) => {
     code, title: b.title ?? a.title, klass: b.klass ?? a.klass, grade: b.grade === undefined ? a.grade : (b.grade === null || b.grade === '' ? null : Number(b.grade)),
     assignedOn: b.assignedOn === undefined ? a.assignedOn : b.assignedOn || null, sheets: Number(b.sheets ?? a.sheets), twoSided: b.twoSided === undefined ? a.twoSided : (b.twoSided ? 1 : 0),
     tags: b.tags ?? a.tags, notes: b.notes === undefined ? a.notes : b.notes, sides: b.sides === undefined ? a.sides : (b.sides === null || b.sides === '' ? null : Number(b.sides)),
+    expect: b.expect === undefined ? a.expect : expectFromBody(b.expect), waiting: a.waiting,
   })
   refreshPacketsFor(code)
   res.json(getAssignment(code))
 })
+
+/** The sides that come back, as a request sends them: an array ("1a", "2a") or a comma list; empty or null means all of them. */
+function expectFromBody(v: unknown): string | null {
+  if (v == null) return null
+  if (Array.isArray(v)) return formatExpect(v.map(String))
+  return typeof v === 'string' ? formatExpect(v.split(',')) : null
+}
 
 function cleanRubric(b: Partial<Rubric>): Rubric {
   const r = { ...DEFAULT_RUBRIC, ...b }
@@ -336,7 +348,7 @@ api.get('/assignments/:code', (req, res) => {
   const average = scored.length ? scored.reduce((t, p) => t + (p.score ?? 0), 0) / scored.length : null
   const noticingRaw = getMeta(`noticing:${a.code}`)
   const rubric = parseRubric(a.rubric)
-  res.json({ assignment: a, expected: expectedFor(a), students, inReview, average, scoredCount: scored.length, noticing: noticingRaw ? JSON.parse(noticingRaw) : null, analysisOn: getSettings().hasKey, domains: domainsFor(rubric), allDomains: domainList(), rubric, ratings: domainsForAssignment(a.code), anchors: anchorsForAssignment(a.code), agreement: agreementFor(a.code) })
+  res.json({ assignment: a, expected: expectedFor(a), printed: printedSidesFor(a), students, inReview, average, scoredCount: scored.length, noticing: noticingRaw ? JSON.parse(noticingRaw) : null, analysisOn: getSettings().hasKey, domains: domainsFor(rubric), allDomains: domainList(), rubric, ratings: domainsForAssignment(a.code), anchors: anchorsForAssignment(a.code), agreement: agreementFor(a.code) })
 })
 
 // How Claude's scores and ratings compare with the teacher's own, for one assignment or across them all.

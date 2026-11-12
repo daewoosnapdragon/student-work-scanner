@@ -19,7 +19,7 @@ import { annotationsText, pageJpeg } from './marks.js'
 import { abs } from './pipeline.js'
 import { broadcast } from './events.js'
 import { sideLabel } from './codes.js'
-import { parseProgress, parseRubric, SKILL_LEVEL_LABEL, type Assignment, type Packet, type Rubric, type Student } from '../shared/types.js'
+import { parseExpect, parseProgress, parseRubric, SKILL_LEVEL_LABEL, type Assignment, type Packet, type Rubric, type Student } from '../shared/types.js'
 import { anchorsText, rubricText, type AnchorForPrompt } from './analysis.js'
 import { canonicalSkill, saveSkillVocabulary, skillVocabulary, skillVocabularyText } from './skills.js'
 import { skillListForPrompt, type SkillDef } from '../shared/skills.js'
@@ -153,7 +153,7 @@ function system(a: Assignment, rubric: Rubric, domains: string[], skills: SkillD
     'You read scanned worksheets from an elementary English class in Korea (students learning English) and write what each one shows, for the teacher and for the student.',
     'Be concrete and honest. Quote the handwriting rather than describing it vaguely. Never invent work that is not on the page. If a side is blank or unreadable, say so.',
     'The teacher\'s note is professional and brief. The student\'s note is specific and addresses the child by first name; it names one real strength with their own words quoted, and one thing to try next time; it never carries a score, mark or level.',
-    `This assignment: "${a.title}" (${a.code}), ${a.klass}${a.grade != null ? `, grade ${a.grade}` : ''}${a.tags ? `, on ${a.tags}` : ''}. ${a.sheets} sheet${a.sheets === 1 ? '' : 's'}${a.twoSided ? ', both sides' : ''}.${a.notes ? ` Notes: ${a.notes}` : ''}`,
+    `This assignment: "${a.title}" (${a.code}), ${a.klass}${a.grade != null ? `, grade ${a.grade}` : ''}${a.tags ? `, on ${a.tags}` : ''}. ${a.sheets} sheet${a.sheets === 1 ? '' : 's'}${a.twoSided ? ', both sides' : ''}${a.expect ? `; only ${parseExpect(a.expect).map((e) => sideLabel(e.page, e.side)).join(' and ')} come back, the rest stays with the student` : ''}.${a.notes ? ` Notes: ${a.notes}` : ''}`,
     rubricText(rubric, a.grade, domains),
     anchors.length ? anchorsText(anchors, rubric) + ' The anchor packets\' pages come first in the message, each under a line naming its score; the packet to assess comes after them.' : '',
     calibrationText(a.code),

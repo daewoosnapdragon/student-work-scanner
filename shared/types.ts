@@ -34,6 +34,10 @@ export interface Assignment {
   notes: string | null
   /** Total sides actually printed, when fewer than sheets × 2 (a double-sided packet with an odd page count). */
   sides: number | null
+  /** The sides that come back to be scanned, when not every printed side does ("1a,2a": a reading page stays with the student). Null: all of them. */
+  expect: string | null
+  /** 1 while Worksheet Studio has registered the assignment but nothing has been scanned for it yet: it stays out of the lists until a page arrives, so a set printed and never collected leaves no gap. */
+  waiting: number
   /** What the class shows: the analysis of the whole set, pasted in or (later) written by the analysis step. */
   analysis: string | null
   /** The rubric the analysis follows, as JSON (see Rubric). */
@@ -199,4 +203,24 @@ export interface FeedEvent {
   type: 'page' | 'review' | 'packet' | 'status' | 'hello' | 'analysis'
   at: string
   payload: unknown
+}
+
+/** The sides an assignment waits for, from its `expect` ("1a, 2a"), in page order; empty when every printed side does. */
+export function parseExpect(expect: string | null | undefined): Array<{ page: number; side: Side }> {
+  if (!expect) return []
+  const out = new Map<string, { page: number; side: Side }>()
+  for (const part of expect.split(/[,\s]+/)) {
+    const m = /^(\d{1,2})([ab])$/i.exec(part.trim())
+    if (!m || Number(m[1]) < 1) continue
+    const side = m[2].toLowerCase() as Side
+    out.set(`${m[1]}${side}`, { page: Number(m[1]), side })
+  }
+  return [...out.values()].sort((x, y) => x.page - y.page || x.side.localeCompare(y.side))
+}
+/** The stored form of an `expect` list; null for none (every printed side comes back). */
+export function formatExpect(sides: Array<{ page: number; side: Side }> | string[] | string | null | undefined): string | null {
+  if (!sides || !sides.length) return null
+  const keys = typeof sides === 'string' ? [sides] : sides.map((x) => (typeof x === 'string' ? x : `${x.page}${x.side}`))
+  const parsed = parseExpect(keys.join(','))
+  return parsed.length ? parsed.map((x) => `${x.page}${x.side}`).join(',') : null
 }

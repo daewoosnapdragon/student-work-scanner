@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { expectedSides, formatCode, parseCode, sideLabel } from '../server/codes.js'
+import { formatExpect, parseExpect } from '../shared/types.js'
 
 describe('codes', () => {
   it('round-trips a page reference', () => {
@@ -33,5 +34,19 @@ describe('codes', () => {
   it('labels sides for people', () => {
     expect(sideLabel(1, 'a')).toBe('1 front')
     expect(sideLabel(2, 'b')).toBe('2 back')
+  })
+})
+
+describe('the sides that come back', () => {
+  it('reads a list in any order or case, once each, and writes it back in page order', () => {
+    expect(parseExpect('2A, 1a,1a')).toEqual([{ page: 1, side: 'a' }, { page: 2, side: 'a' }])
+    expect(formatExpect(['2a', '1b'])).toBe('1b,2a')
+    expect(formatExpect([{ page: 3, side: 'b' }])).toBe('3b')
+  })
+  it('is empty, meaning every printed side, when nothing usable is given', () => {
+    expect(parseExpect(null)).toEqual([])
+    expect(parseExpect('front, 0a')).toEqual([])
+    expect(formatExpect([])).toBeNull()
+    expect(formatExpect('x')).toBeNull()
   })
 })

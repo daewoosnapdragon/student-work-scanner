@@ -5,6 +5,7 @@ import { DB_PATH } from './config.js'
 import type { Anchor, Assignment, DomainRating, Packet, Page, Progress, RatedBy, Side, Student } from '../shared/types.js'
 import type { Annotation, AnnotationKind } from '../shared/annotations.js'
 import { expectedSides } from './codes.js'
+import { formatExpect, parseExpect } from '../shared/types.js'
 
 let db: DatabaseSync
 
@@ -128,6 +129,8 @@ function migrate(d: DatabaseSync) {
   if (!acols.includes('sides')) d.exec('ALTER TABLE assignments ADD COLUMN sides INTEGER')
   if (!acols.includes('analysis')) d.exec('ALTER TABLE assignments ADD COLUMN analysis TEXT')
   if (!acols.includes('rubric')) d.exec('ALTER TABLE assignments ADD COLUMN rubric TEXT')
+  if (!acols.includes('expect')) d.exec('ALTER TABLE assignments ADD COLUMN expect TEXT')
+  if (!acols.includes('waiting')) d.exec('ALTER TABLE assignments ADD COLUMN waiting INTEGER NOT NULL DEFAULT 0')
   const pcols = (d.prepare('PRAGMA table_info(packets)').all() as Array<{ name: string }>).map((c) => c.name)
   if (!pcols.includes('feedback')) d.exec('ALTER TABLE packets ADD COLUMN feedback TEXT')
   if (!pcols.includes('analysedAt')) d.exec('ALTER TABLE packets ADD COLUMN analysedAt TEXT')
@@ -185,14 +188,15 @@ export function listAssignments(): Assignment[] {
 export function getAssignment(code: string): Assignment | undefined {
   return getDb().prepare('SELECT * FROM assignments WHERE code = ?').get(code) as unknown as Assignment | undefined
 }
-export function upsertAssignment(a: Omit<Assignment, 'createdAt' | 'sides' | 'analysis' | 'rubric'> & { sides?: number | null }) {
+export function upsertAssignment(a: Omit<Assignment, 'createdAt' | 'sides' | 'analysis' | 'rubric' | 'expect' | 'waiting'> & { sides?: number | null; expect?: string | null; waiting?: number }) {
   getDb()
     .prepare(
-      `INSERT INTO assignments (code,title,klass,grade,assignedOn,sheets,twoSided,tags,notes,sides) VALUES (?,?,?,?,?,?,?,?,?,?)
+      `INSERT INTO assignments (code,title,klass,grade,assignedOn,sheets,twoSided,tags,notes,sides,expect,waiting) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(code) DO UPDATE SET title=excluded.title, klass=excluded.klass, grade=excluded.grade,
-       assignedOn=excluded.assignedOn, sheets=excluded.sheets, twoSided=excluded.twoSided, tags=excluded.tags, notes=excluded.notes, sides=excluded.sides`,
+       assignedOn=excluded.assignedOn, sheets=excluded.sheets, twoSided=excluded.twoSided, tags=excluded.tags, notes=excluded.notes, sides=excluded.sides,
+       expect=excluded.expect, waiting=excluded.waiting`,
     )
-    .run(a.code, a.title, a.klass, a.grade ?? null, a.assignedOn ?? null, a.sheets, a.twoSided, a.tags ?? '', a.notes ?? null, a.sides ?? null)
+    .run(a.code, a.title, a.klass, a.grade ?? null, a.assignedOn ?? null, a.sheets, a.twoSided, a.tags ?? '', a.notes ?? null, a.sides ?? null, formatExpect(a.expect), a.waiting ?? 0)
 }
 export function setAssignmentRubric(code: string, rubric: string | null) {
   getDb().prepare('UPDATE assignments SET rubric = ? WHERE code = ?').run(rubric, code)
@@ -222,8 +226,17 @@ export function deleteAssignment(code: string): boolean {
   return true
 }
 // Every side the assignment expects. `sides` caps it for a double-sided
-// packet with an odd page count, whose last back is blank and never scanned.
+// packet with an odd page count, whose last back is blank and never scanned;
+// `expect` names the sides that come back when some stay with the student
+// (a reading page), and then only those are waited for.
 export function sidesFor(a: Assignment): Array<{ page: number; side: Side }> {
+  const chosen = parseExpect(a.expect)
+  if (chosen.length) return chosen
+  const all = expectedSides(a.sheets, !!a.twoSided)
+  return a.sides && a.sides > 0 && a.sides < all.length ? all.slice(0, a.sides) : all
+}
+/** Every side that was printed, whether or not it comes back: what the Comes back ticks choose among. */
+export function printedSidesFor(a: Assignment): Array<{ page: number; side: Side }> {
   const all = expectedSides(a.sheets, !!a.twoSided)
   return a.sides && a.sides > 0 && a.sides < all.length ? all.slice(0, a.sides) : all
 }
@@ -312,8 +325,12 @@ export function refreshPacket(student: string, assignment: string, at: string): 
   const a = getAssignment(assignment)
   const expected = a ? expectedFor(a) : 1
   const pages = packetPages(student, assignment)
-  const sides = new Set(pages.map((p) => `${p.page}${p.side}`)).size
+  // only the sides the assignment waits for count; a page that stays with the student but came back anyway is kept, not counted
+  const wanted = a ? new Set(sidesFor(a).map((e) => `${e.page}${e.side}`)) : null
+  const sides = new Set(pages.map((p) => `${p.page}${p.side}`).filter((k) => !wanted || wanted.has(k))).size
   const existing = getPacket(student, assignment)
+  // the first page scanned for an assignment Worksheet Studio registered: it is real now, and shows
+  if (a?.waiting && pages.length) d.prepare('UPDATE assignments SET waiting = 0 WHERE code = ?').run(assignment)
   const firstAt = existing?.firstAt ?? pages[0]?.scannedAt ?? at
   const lastAt = pages.reduce((m, p) => (p.scannedAt > m ? p.scannedAt : m), existing?.lastAt ?? at)
   const closed = existing?.closedIncomplete ?? 0
