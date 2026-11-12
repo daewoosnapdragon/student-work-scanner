@@ -590,7 +590,7 @@ print.get('/labels/:assignment', async (req, res) => {
   for (const s of roster) {
     for (const sd of sides) {
       const code = formatCode({ student: s.code, assignment: a.code, page: sd.page, side: sd.side })
-      const svg = await QRCode.toString(code, { type: 'svg', margin: 1, errorCorrectionLevel: 'H', width: 96 })
+      const svg = await QRCode.toString(code, { type: 'svg', margin: 4, errorCorrectionLevel: 'H', width: 96 })
       labels.push(`<div class="label">${svg}<div class="t"><b>${esc(s.name)}</b><span>${s.code} · ${a.code} · ${sideLabel(sd.page, sd.side)}</span></div></div>`)
     }
   }
@@ -724,7 +724,7 @@ ${a.analysis ? `<section class="rec"><h2>What the class shows</h2>${a.analysis.s
 print.get('/code/:student/:assignment/:page/:side.svg', async (req, res) => {
   const { student, assignment, page, side } = req.params
   const code = formatCode({ student: student.toUpperCase(), assignment: assignment.toUpperCase(), page: Number(page), side: side.toLowerCase() as Side })
-  res.type('image/svg+xml').send(await QRCode.toString(code, { type: 'svg', margin: 1, errorCorrectionLevel: 'H' }))
+  res.type('image/svg+xml').send(await QRCode.toString(code, { type: 'svg', margin: 4, errorCorrectionLevel: 'H' }))
 })
 
 /** "Since last time" for the printed record: moved-up skills first, then the follow-up. */

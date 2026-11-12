@@ -4,8 +4,12 @@ import { expectedSides, formatCode, parseCode, sideLabel } from '../server/codes
 describe('codes', () => {
   it('round-trips a page reference', () => {
     const ref = { student: 'S07', assignment: 'W23', page: 2, side: 'b' as const }
-    expect(formatCode(ref)).toBe('SWS1|S07|W23|2b')
+    expect(formatCode(ref)).toBe('SWS1:S07:W23:2B')
     expect(parseCode(formatCode(ref))).toEqual(ref)
+  })
+  it('still reads the codes on sets printed before the colon', () => {
+    expect(parseCode('SWS1|S07|W23|2b')).toEqual({ student: 'S07', assignment: 'W23', page: 2, side: 'b' })
+    expect(parseCode('SWS1:3D07:W24-2:12A')).toEqual({ student: '3D07', assignment: 'W24-2', page: 12, side: 'a' })
   })
   it('is forgiving about case and whitespace', () => {
     expect(parseCode('  sws1|s07|w23|1A ')).toEqual({ student: 'S07', assignment: 'W23', page: 1, side: 'a' })
@@ -13,6 +17,7 @@ describe('codes', () => {
   it('rejects codes that are not ours', () => {
     expect(parseCode('https://example.com')).toBeNull()
     expect(parseCode('SWS1|S07|W23')).toBeNull()
+    expect(parseCode('SWS1:S07:W23')).toBeNull()
     expect(parseCode('SWS2|S07|W23|1a')).toBeNull()
     expect(parseCode('SWS1|S07|W23|0a')).toBeNull()
     expect(parseCode('SWS1|S07|W23|1c')).toBeNull()
