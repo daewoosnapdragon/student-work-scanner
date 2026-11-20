@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { useFetch, fmtDate, fileUrl, sideLabel, type Assignment, type Packet, type Page, type Student } from '../api'
+import { put, useFetch, fmtDate, fileUrl, sideLabel, type Assignment, type Packet, type Page, type Student } from '../api'
 import ProgressRow from '../components/ProgressRow'
 import { ScanLink, type ViewerPage } from '../components/Viewer'
 
@@ -12,8 +12,10 @@ const LEVEL_BG: Record<number, string> = { 4: '#dff0e5', 3: '#eef5e9', 2: '#fff3
 
 export default function StudentPage() {
   const { code } = useParams()
-  const { data, error } = useFetch<Data>(`/api/students/${code}`)
+  const [bump, setBump] = useState(0)
+  const { data, error } = useFetch<Data>(`/api/students/${code}`, bump)
   const [open, setOpen] = useState<string | null>(null)
+  const [editing, setEditing] = useState(false)
   if (error) return <main><p className="err">{error}</p></main>
   if (!data) return <main><p className="muted">Loading</p></main>
   const { student: s, packets } = data
@@ -26,7 +28,11 @@ export default function StudentPage() {
     <main>
       <section className="col" style={{ gap: 12 }}>
         <div className="over"><Link to="/students">Students</Link> <span className="muted">/</span> {s.code}</div>
-        <h1 className="serif title">{s.name}</h1>
+        <div className="row" style={{ alignItems: 'center' }}>
+          <h1 className="serif title" style={{ margin: 0 }}>{s.name}</h1>
+          <button className="btn" style={{ marginLeft: 'auto' }} onClick={() => setEditing((v) => !v)}>{editing ? 'Cancel' : 'Edit name'}</button>
+        </div>
+        {editing && <EditName s={s} onDone={() => { setEditing(false); setBump((b) => b + 1) }} />}
         <p className="serif" style={{ margin: 0, fontSize: 17, fontStyle: 'italic', color: 'var(--ink2)' }}>
           {[s.nameKo, s.grade != null && `Grade ${s.grade}`, s.klass, s.homeroom, `code ${s.code}`].filter(Boolean).join(' · ')}
         </p>
@@ -76,6 +82,32 @@ export default function StudentPage() {
         </div>
       </section>
     </main>
+  )
+}
+
+function EditName({ s, onDone }: { s: Student; onDone: () => void }) {
+  const [name, setName] = useState(s.name)
+  const [nameKo, setNameKo] = useState(s.nameKo ?? '')
+  const [err, setErr] = useState<string | null>(null)
+  async function save() {
+    try {
+      setErr(null)
+      await put(`/api/students/${s.code}`, { name, nameKo })
+      onDone()
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+  return (
+    <form className="card" style={{ gap: 10 }} onSubmit={(e) => { e.preventDefault(); void save() }}>
+      <div className="muted small">The code {s.code} stays: it is on the labels, and all of {s.name}'s work is filed under it. Notes already written keep the old spelling. A later roster import sets the name from the CSV again.</div>
+      <div className="row" style={{ gap: 12 }}>
+        <label className="col" style={{ gap: 4, flex: 1 }}><span className="over quiet" style={{ fontSize: 10 }}>Name</span><input type="text" required autoFocus value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <label className="col" style={{ gap: 4, flex: 1 }}><span className="over quiet" style={{ fontSize: 10 }}>Korean name</span><input type="text" value={nameKo} onChange={(e) => setNameKo(e.target.value)} /></label>
+      </div>
+      {err && <p className="err" style={{ margin: 0 }}>{err}</p>}
+      <div className="row"><button type="submit" className="btn primary">Save</button><button type="button" className="btn" onClick={onDone}>Cancel</button></div>
+    </form>
   )
 }
 

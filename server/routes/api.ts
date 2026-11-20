@@ -129,6 +129,19 @@ api.post('/students', (req, res) => {
   res.json(getStudent(String(b.code).toUpperCase()))
 })
 
+// Correct a student's name. The code stays: it is printed on their labels, and
+// every page and packet is filed under it, so all their work follows the new name.
+api.put('/students/:code', (req, res) => {
+  const s = getStudent(req.params.code.toUpperCase())
+  if (!s) return res.status(404).json({ error: 'no such student' })
+  const b = req.body ?? {}
+  const name = b.name === undefined ? s.name : String(b.name).trim()
+  if (!name) return res.status(400).json({ error: 'The name cannot be empty.' })
+  const nameKo = b.nameKo === undefined ? s.nameKo : String(b.nameKo ?? '').trim() || null
+  upsertStudent({ ...s, name, nameKo })
+  res.json(getStudent(s.code))
+})
+
 api.get('/students/:code', (req, res) => {
   const s = getStudent(req.params.code.toUpperCase())
   if (!s) return res.status(404).json({ error: 'no such student' })
