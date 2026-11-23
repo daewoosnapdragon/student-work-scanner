@@ -476,6 +476,10 @@ export function updateAnnotation(id: number, patch: Partial<Pick<Annotation, 'x'
   getDb().prepare('UPDATE annotations SET x = ?, y = ?, w = ?, h = ?, kind = ?, text = ? WHERE id = ?').run(n.x, n.y, n.w, n.h, n.kind, n.text, id)
   return getAnnotation(id)
 }
+/** A rescan takes over the comments pinned to the scan it replaces: same page, same spots. */
+export function moveAnnotations(fromPageId: number, toPageId: number): number {
+  return Number(getDb().prepare('UPDATE annotations SET pageId = ? WHERE pageId = ?').run(toPageId, fromPageId).changes)
+}
 export function deleteAnnotation(id: number): boolean {
   return getDb().prepare('DELETE FROM annotations WHERE id = ?').run(id).changes > 0
 }

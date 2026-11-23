@@ -4,7 +4,7 @@ import sharp from 'sharp'
 import * as mupdf from 'mupdf'
 import { ARCHIVE_DIR, DATA_DIR, HOLDING_DIR, INBOX_DIR, INCOMPLETE_AFTER_MIN, ORIGINALS_DIR, PDF_DPI, THUMBS_DIR } from './config.js'
 import { decodePage, makeThumb } from './decode.js'
-import { deletePacket, getAssignment, getStudent, hasSide, insertPage, nextSeq, openPackets, packetPages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
+import { deletePacket, getAssignment, getStudent, insertPage, moveAnnotations, nextSeq, openPackets, packetPages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
 import { broadcast } from './events.js'
 import type { Packet, Page, PageRef, Side } from '../shared/types.js'
 import { shortSide } from './codes.js'
@@ -129,6 +129,9 @@ export async function processImage(file: string, sourceName: string, from: Origi
   const problem = ref ? placementProblem(ref) : decoded.text ? `Code read as "${decoded.text}" but it is not one of ours` : 'Code not readable'
 
   if (ref && !problem) {
+    // A side scanned again replaces the scan already there: the newer scan is
+    // the one wanted, and its comments move over with it.
+    const dup = duplicateOf(ref)
     const dest = archivePath(ref, sourceName)
     fs.mkdirSync(path.dirname(dest), { recursive: true })
     fs.renameSync(file, dest)
@@ -137,6 +140,7 @@ export async function processImage(file: string, sourceName: string, from: Origi
       sourceName, filePath: rel(dest), thumbPath, width: decoded.width, height: decoded.height, decoded: decoded.text, reason: null, filedFrom: 'code',
       origin: from?.origin ?? null, originPage: from?.originPage ?? null,
     })
+    if (dup) replaceScan(dup, p)
     const packet = refreshPacket(ref.student, ref.assignment, at)
     broadcast('page', { page: p, packet })
     if (packet.complete) { broadcast('packet', packet); onComplete?.(packet) }
@@ -161,8 +165,16 @@ function placementProblem(ref: PageRef): string | null {
   if (!a) return `Code names assignment ${ref.assignment}, which has not been set up`
   if (ref.page > a.sheets) return `Code says sheet ${ref.page} but ${a.code} has ${a.sheets}`
   if (ref.side === 'b' && !a.twoSided) return `Code says a back side but ${a.code} is single-sided`
-  if (hasSide(ref.student, ref.assignment, ref.page, ref.side)) return `${ref.student} already has ${shortSide(ref.page, ref.side)} of ${ref.assignment} filed; this may be a rescan`
   return null
+}
+
+// The earlier scan of a side steps aside for the new one. Its file has just
+// been written over (same archive path), so only the record and the comments
+// change hands.
+function replaceScan(old: Page, by: Page) {
+  updatePage(old.id, { status: 'replaced', reason: `replaced by rescan, page ${by.id}` })
+  moveAnnotations(old.id, by.id)
+  console.log(`[rescan] ${old.student} ${old.assignment} ${shortSide(old.page!, old.side!)}: ${old.sourceName} replaced by ${by.sourceName}`)
 }
 
 // Review decisions -----------------------------------------------------------
@@ -176,7 +188,6 @@ export function fileFromReview(pageId: number, ref: PageRef, allowDuplicate = fa
   if (!a) throw new Error(`no assignment ${ref.assignment}`)
   const dup = duplicateOf(ref)
   if (dup && !allowDuplicate) throw new Error(`${ref.student} already has ${shortSide(ref.page, ref.side)} of ${ref.assignment}`)
-  if (dup) updatePage(dup.id, { status: 'replaced', reason: `replaced by rescan, page ${pageId}` })
   const from = abs(p.filePath)
   const dest = archivePath(ref, p.sourceName)
   fs.mkdirSync(path.dirname(dest), { recursive: true })
@@ -184,6 +195,7 @@ export function fileFromReview(pageId: number, ref: PageRef, allowDuplicate = fa
   updatePage(pageId, {
     status: 'filed', student: ref.student, assignment: ref.assignment, page: ref.page, side: ref.side, filePath: rel(dest), reason: null, filedFrom: 'review',
   })
+  if (dup) replaceScan(dup, getPage(pageId)!)
   const packet = refreshPacket(ref.student, ref.assignment, p.scannedAt)
   const updated = getPage(pageId)!
   broadcast('page', { page: updated, packet })
