@@ -62,6 +62,10 @@ export interface Page {
   decoded: string | null // raw QR text if any
   reason: string | null // why it is in review
   filedFrom: 'code' | 'review' | null
+  /** The PDF this page was rendered from, relative to the data dir (under originals/); null for a page the scanner saved as an image. */
+  origin?: string | null
+  /** 1-based page number within that PDF. */
+  originPage?: number | null
   /** How many comments the teacher has pinned to this page; set on lists that show a badge. */
   annotations?: number
 }

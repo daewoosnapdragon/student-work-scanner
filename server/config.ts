@@ -8,6 +8,7 @@ export const DATA_DIR = path.resolve(process.env.SWS_DATA_DIR ?? path.join(root,
 export const INBOX_DIR = path.resolve(process.env.SWS_INBOX ?? path.join(DATA_DIR, 'inbox'))
 export const ARCHIVE_DIR = path.join(DATA_DIR, 'archive') // filed pages
 export const HOLDING_DIR = path.join(DATA_DIR, 'holding') // pages waiting in review
+export const ORIGINALS_DIR = path.join(DATA_DIR, 'originals') // the PDFs the scanner wrote, kept as they came
 export const THUMBS_DIR = path.join(DATA_DIR, 'thumbs')
 export const DB_PATH = path.join(DATA_DIR, 'scanner.sqlite')
 export const PORT = Number(process.env.PORT ?? 4710)
@@ -16,5 +17,5 @@ export const INCOMPLETE_AFTER_MIN = Number(process.env.SWS_INCOMPLETE_AFTER_MIN 
 export const PDF_DPI = Number(process.env.SWS_PDF_DPI ?? 200)
 
 export function ensureDirs() {
-  for (const d of [DATA_DIR, INBOX_DIR, ARCHIVE_DIR, HOLDING_DIR, THUMBS_DIR]) fs.mkdirSync(d, { recursive: true })
+  for (const d of [DATA_DIR, INBOX_DIR, ARCHIVE_DIR, HOLDING_DIR, ORIGINALS_DIR, THUMBS_DIR]) fs.mkdirSync(d, { recursive: true })
 }

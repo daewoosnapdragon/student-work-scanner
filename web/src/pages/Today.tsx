@@ -9,7 +9,7 @@ interface TodayData {
   noticing: { text: string; at: string; assignment: string } | null
   analysisOn: boolean
 }
-interface Status { inbox: string; queued: number; busy: boolean; lastSeen: string | null }
+interface Status { inbox: string; originals?: string; queued: number; busy: boolean; lastSeen: string | null }
 
 export default function Today() {
   const { data, error } = useFetch<TodayData>('/api/today')
@@ -23,7 +23,7 @@ export default function Today() {
           <div className="over">Scanning now · {today}</div>
           <div className="muted small">
             <span className="dot" style={{ background: status ? 'var(--green)' : 'var(--chip)' }} />
-            {status ? `Watching ${status.inbox}` : 'Connecting to the scanner service'}
+            {status ? <span title={status.originals ? `Scanned PDFs are kept, as they came, in ${status.originals}` : undefined}>Watching {status.inbox}</span> : 'Connecting to the scanner service'}
             {status?.lastSeen && ` · last page ${fmtTime(status.lastSeen)}`}
             {status?.queued ? ` · ${status.queued} waiting` : ''}
           </div>

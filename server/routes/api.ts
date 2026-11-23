@@ -320,6 +320,11 @@ api.get('/packets/:assignment/:student/pdf', async (req, res) => {
   }
 })
 
+// The pages one student has filed for an assignment, so Review can show which sides are already in.
+api.get('/packets/:assignment/:student/pages', (req, res) => {
+  res.json(packetPages(req.params.student.toUpperCase(), req.params.assignment.toUpperCase()))
+})
+
 // The pages of a packet in a new order: sides renumbered by position.
 api.post('/packets/:assignment/:student/order', (req, res) => {
   const ids = Array.isArray(req.body?.pageIds) ? (req.body.pageIds as unknown[]).map(Number) : []
