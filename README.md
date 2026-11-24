@@ -66,6 +66,10 @@ Three kinds of item clear themselves in one go. Pages whose code names an assign
 
 Before the first run, empty the scan folder of old scans, or expect them all in review.
 
+### Sorting a pile by hand
+
+**Sort onto students** (from Review) shows every waiting page as a thumbnail in scan order, and the class as a grid of cards saying what each student has filed and still needs. Drag a page onto a student and it takes the next side that student is missing; click the side label to move it to another side. Click pages to select several (shift-click for a run) and drag them together, or press a card's **Put here**. Drop a page back on the tray to undo. One button files the lot; a side that was filed already is marked in red and replaced.
+
 ### Work from before the codes
 
 Scan the pile in order, fronts and backs as the scanner feeds them, and open Review, then File a stack. Choose the assignment (or make it there). The stack is cut into one packet per student, so many sides each, and every packet gets the next student on the roster who has not turned that work in, in name order. Check the names against the page thumbnails, change any that are wrong, give a student with fewer or more sides their own count, click a page to leave it out, then file the lot. Pages file the same way coded ones do.

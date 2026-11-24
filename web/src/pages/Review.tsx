@@ -234,8 +234,8 @@ export default function Review() {
 
       {uncoded > 3 && (
         <div className="notice row" style={{ justifyContent: 'space-between' }}>
-          <span>{uncoded} pages here have no code. If they are one assignment scanned in order, File a stack names them all at once: one student per packet, pre-filled from the roster.</span>
-          <Link className="btn primary" to="/review/stack">File a stack</Link>
+          <span>{uncoded} pages here have no code. Sort onto students shows them as thumbnails to drag onto the roster; if they are one assignment scanned in order, File a stack names them all at once.</span>
+          <span className="row" style={{ gap: 8 }}><Link className="btn primary" to="/review/sort">Sort onto students</Link><Link className="btn" to="/review/stack">File a stack</Link></span>
         </div>
       )}
       {item && (
@@ -360,7 +360,8 @@ export default function Review() {
         <div className="between">
           <div className="over">The queue</div>
           <div className="row">
-            {uncoded > 1 && <Link className="btn primary" to="/review/stack" title="Pages scanned in order without codes: one assignment, cut into packets, a student each">File a stack</Link>}
+            {items.some((i) => i.kind === 'page') && <Link className="btn primary" to="/review/sort" title="Every waiting page as a thumbnail: drag each onto its student">Sort onto students</Link>}
+            {uncoded > 1 && <Link className="btn" to="/review/stack" title="Pages scanned in order without codes: one assignment, cut into packets, a student each">File a stack</Link>}
             {packetItems > 1 && <button className="btn" onClick={() => void closeAllPackets()} title="Packets missing a side: keep what came, take them off this list">Close all {packetItems} incomplete packets</button>}
             {items.some((i) => i.kind === 'page') && <button className="btn" onClick={() => void skipAll()}>Skip everything in the queue</button>}
           </div>

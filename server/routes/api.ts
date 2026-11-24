@@ -490,13 +490,13 @@ api.post('/review/:id/file', (req, res) => {
 // A whole stack filed at once: pages scanned in order without codes, cut into
 // packets by the caller, each page told whose it is and which side.
 api.post('/review/batch', (req, res) => {
-  const items = Array.isArray(req.body?.items) ? (req.body.items as Array<{ pageId: number; student: string; assignment: string; page: number; side: string }>) : []
+  const items = Array.isArray(req.body?.items) ? (req.body.items as Array<{ pageId: number; student: string; assignment: string; page: number; side: string; replace?: boolean }>) : []
   if (!items.length) return res.status(400).json({ error: 'nothing to file' })
   const filed: number[] = []
   const failed: Array<{ pageId: number; error: string }> = []
   for (const it of items) {
     try {
-      fileFromReview(Number(it.pageId), { student: String(it.student).toUpperCase(), assignment: String(it.assignment).toUpperCase(), page: Number(it.page), side: String(it.side).toLowerCase() as Side }, false)
+      fileFromReview(Number(it.pageId), { student: String(it.student).toUpperCase(), assignment: String(it.assignment).toUpperCase(), page: Number(it.page), side: String(it.side).toLowerCase() as Side }, !!it.replace)
       filed.push(Number(it.pageId))
     } catch (err) {
       failed.push({ pageId: Number(it.pageId), error: (err as Error).message })
