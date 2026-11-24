@@ -67,8 +67,8 @@ export default function Assignments() {
 
   const analysisOn = !!settings?.hasKey
   const actions = new Map((shown ?? []).map((a) => [a.code, nextAction({ ...a, analysisOn })]))
-  // one red button on the screen: the first row whose next step is a real job, not just opening
-  const primary = shown?.find((a) => { const n = actions.get(a.code)!; return n.kind !== 'link' || n.label === 'Check pile' })?.code
+  // one red button on the screen: the first row whose next step is a real job (check, analyse or copy the prompt, print), not just opening
+  const primary = shown?.find((a) => !a.waiting && actions.get(a.code)!.label !== 'Open')?.code
   const noticed = (data ?? []).filter((a) => a.noticing)
 
   return (

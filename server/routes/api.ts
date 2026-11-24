@@ -368,7 +368,7 @@ api.post('/pages/:id/unfile', (req, res) => {
 api.delete('/assignments/:code', (req, res) => {
   const code = req.params.code.toUpperCase()
   if (!getAssignment(code)) return res.status(404).json({ error: 'no such assignment' })
-  if (!deleteAssignment(code)) return res.status(409).json({ error: `${code} has scanned work filed under it, so it stays. Pages can be skipped or refiled from Review first.` })
+  if (!deleteAssignment(code)) return res.status(409).json({ error: `${code} has scanned work filed under it, so it stays. Its pages can be sent to loose pages and refiled first.` })
   res.json({ deleted: code })
 })
 

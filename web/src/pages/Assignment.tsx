@@ -336,7 +336,7 @@ function PacketPanel({ primary, s, a, onSaved, analysisOn, busyJob, domains, rat
           </div>
         ))}
       </div>
-      <div className="muted small">Pages out of order? The arrows move a page; sides are renumbered by position. × sends a page back to Review.</div>
+      <div className="muted small">Pages out of order? The arrows move a page; sides are renumbered by position. × sends a page to loose pages.</div>
       {anchoring && <AnchorForm primary={primary} a={a} s={s} anchor={anchor} rubric={rubric} onDone={() => { setAnchoring(false); onSaved() }} />}
       {parseCriteria(p.criteria).length > 0 && (
         <div className="row" style={{ gap: 6 }}>
