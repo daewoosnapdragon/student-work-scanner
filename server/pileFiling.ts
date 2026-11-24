@@ -8,6 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { HOLDING_DIR } from './config.js'
+import { parseCode } from './codes.js'
 import { emptyOrDeletePacket, getAssignment, getDb, getPage, getPile, getStudent, listStudents, packetPages, packetsForAssignment, pilePages, printedSidesFor, sidesFor, updatePage, updatePile } from './db.js'
 import { broadcast } from './events.js'
 import { abs, fileFromReview, pileArriving, rel, restoreReplaced } from './pipeline.js'
@@ -132,33 +133,42 @@ export function namePile(pileId: number, assignment: string): Pile {
 export function undoPile(pileId: number): Pile {
   const pile = mustPile(pileId)
   const emptied = new Map<string, [string, string]>()
+  const taken = pilePages(pileId).filter((p) => p.status === 'filed' || p.status === 'not_work')
+  for (const p of taken) if (p.student && p.assignment) emptied.set(`${p.student}/${p.assignment}`, [p.student, p.assignment])
+  // Scans the pile replaced come back first: if one cannot, nothing else has changed yet.
+  for (const p of taken) {
+    if (p.status !== 'filed') continue
+    const old = getDb().prepare("SELECT id FROM pages WHERE status = 'replaced' AND reason = ?").get(`replaced by rescan, page ${p.id}`) as { id: number } | undefined
+    if (old) restoreReplaced(old.id) // moves this page to holding itself
+  }
   for (const p of pilePages(pileId)) {
-    if (p.status !== 'filed' && p.status !== 'not_work') {
-      if (p.status === 'review') updatePage(p.id, { reason: 'in pile' })
+    if (p.status === 'review') {
+      updatePage(p.id, { reason: 'in pile' })
+      if (taken.some((t) => t.id === p.id)) putBack(p)
       continue
     }
-    if (p.student && p.assignment) emptied.set(`${p.student}/${p.assignment}`, [p.student, p.assignment])
-    if (p.status === 'filed') {
-      const old = getDb().prepare("SELECT id FROM pages WHERE status = 'replaced' AND reason = ?").get(`replaced by rescan, page ${p.id}`) as { id: number } | undefined
-      if (old) restoreReplaced(old.id) // moves this page to holding itself
-    }
-    const now = getPage(p.id)!
-    let filePath = now.filePath
-    const from = abs(now.filePath)
-    if (now.status === 'filed' || now.status === 'not_work') {
-      const dest = path.join(HOLDING_DIR, `${now.seq}-${now.sourceName}`)
-      if (from !== dest && fs.existsSync(from)) {
-        fs.renameSync(from, dest)
-        filePath = rel(dest)
-      }
-    }
-    updatePage(p.id, { status: 'review', filePath, reason: 'in pile', filedFrom: null, student: null, assignment: null, page: null, side: null })
+    if (p.status === 'filed' || p.status === 'not_work') putBack(p)
   }
   for (const [student, assignment] of emptied.values()) emptyOrDeletePacket(student, assignment)
   updatePile(pile.id, { status: 'new', assignment: null, sheets: null, twoSided: null, held: [], settledAt: null })
   const out = getPile(pileId)!
   broadcast('pile', out)
   return out
+}
+
+/** One taken page back in the pile as it arrived: file in holding, unsettled, with the code its text read. */
+function putBack(p: Page) {
+  let filePath = p.filePath
+  if (p.status !== 'review') {
+    const dest = path.join(HOLDING_DIR, `${p.seq}-${p.sourceName}`)
+    const from = abs(p.filePath)
+    if (from !== dest && fs.existsSync(from)) {
+      fs.renameSync(from, dest)
+      filePath = rel(dest)
+    }
+  }
+  const ref = parseCode(p.decoded)
+  updatePage(p.id, { status: 'review', filePath, reason: 'in pile', filedFrom: null, student: ref?.student ?? null, assignment: ref?.assignment ?? null, page: ref?.page ?? null, side: ref?.side ?? null })
 }
 
 /** Files a held sheet as the given student's sheet: its front as side a, its back as side b. */

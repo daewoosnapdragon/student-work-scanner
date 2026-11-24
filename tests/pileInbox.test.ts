@@ -246,7 +246,9 @@ describe('undo', () => {
     expect(db.getPile(pile.id)).toMatchObject({ status: 'new', assignment: null, held: [], sheets: null, twoSided: null, settledAt: null })
     const pages = db.pilePages(pile.id)
     expect(pages).toHaveLength(4)
-    expect(pages.every((p) => p.status === 'review' && p.reason === 'in pile' && p.student === null && p.assignment === null && p.page === null && p.side === null && p.filedFrom === null)).toBe(true)
+    expect(pages.every((p) => p.status === 'review' && p.reason === 'in pile' && p.filedFrom === null)).toBe(true)
+    // as they arrived: the code each page read is still on it
+    expect(pages.map((p) => `${p.student}:${p.assignment}:${p.page}${p.side}`)).toEqual(['S01:W23:1a', 'S01:W23:2a', 'S01:W23:2b', 'S01:W23:1b'])
     expect(pages.every((p) => fs.existsSync(path.join(config.DATA_DIR, p.filePath)) && p.filePath.startsWith('holding'))).toBe(true)
     expect(db.getPage(originalId)).toMatchObject({ status: 'filed' })
     expect(db.packetPages('S01', 'W23').map((p) => p.id)).toEqual([originalId])
@@ -259,9 +261,8 @@ describe('undo', () => {
     filing.undoPile(pile.id)
     expect(db.getPacket('S02', 'W23')).toBeUndefined()
     expect(db.getPile(pile.id)!.status).toBe('new')
-      // the codes were taken back with the filing, so it settles by position and waits on the check screen
-    const again = filing.namePile(pile.id, 'W23')
-    expect(again).toMatchObject({ status: 'checking', assignment: 'W23' })
-    expect(again.held).toHaveLength(2)
+      // the codes came back with the pages, so it settles by them again
+    expect(filing.namePile(pile.id, 'W23').status).toBe('done')
+    expect(db.pilePages(pile.id).every((p) => p.status === 'filed' && p.filedFrom === 'code')).toBe(true)
   })
 })
