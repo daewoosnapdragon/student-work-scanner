@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { get, post, useFetch, fileUrl, type Assignment, type HeldSheet, type Page, type Pile, type Student } from '../api'
 import { useViewer, type ViewerPage } from '../components/Viewer'
@@ -75,6 +75,9 @@ export default function PileCheck() {
   )
 }
 
+// After a mouse click a button lets go of focus, so Enter goes back to filing; a keyboard press keeps its place.
+const blurIfMouse = (e: MouseEvent<HTMLElement>) => { if (e.detail > 0) e.currentTarget.blur() }
+
 // ---------- held sheets, one at a time ----------
 
 function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: Assignment; onDone: (c: Checked[], problem?: string | null) => void }) {
@@ -114,7 +117,8 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
       .catch(() => alive && setSearch({ q: query, list: [] })), 150)
     return () => { alive = false; clearTimeout(t) }
   }, [query])
-  const onType = (text: string) => { setTyped(text); setSearch(null); setPick(otherN); setErr(null) }
+  // the search stays: it is keyed by its query, and resolveTyped ignores it once the query changes
+  const onType = (text: string) => { setTyped(text); setPick(otherN); setErr(null) }
 
   const resolved = resolveTyped(typed, search, a.code, data.roster)
   const typedAs = resolved.kind === 'one' ? resolved : null
@@ -183,8 +187,8 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
         if (e.key === 'Escape') t.blur()
         return
       }
-      // Enter on a student in the Which one? list chooses that student; anywhere else it files
-      if (e.key === 'Enter' && t?.dataset.choose) return
+      // Enter on a focused button or link does what that button or link does (the File button files); anywhere else it files
+      if (e.key === 'Enter' && t && (t.tagName === 'BUTTON' || t.tagName === 'A')) return
       if (e.key === 'j' || e.key === 'J') setIdx((i) => Math.min(i + 1, held.length - 1))
       else if (e.key === 'k' || e.key === 'K') setIdx((i) => Math.max(i - 1, 0))
       else if (/^[1-3]$/.test(e.key) && Number(e.key) <= otherN) {
@@ -204,7 +208,7 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
     <div className="col" style={{ gap: 4 }}>
       <span className="over quiet" style={{ fontSize: 10 }}>{label}</span>
       {p ? (
-        <button type="button" className="scanlink" onClick={(e) => { e.currentTarget.blur(); openViewer(views, at) }} title="Open large. Wheel to zoom, drag to move, Esc to close.">
+        <button type="button" className="scanlink" onClick={(e) => { blurIfMouse(e); openViewer(views, at) }} title="Open large. Wheel to zoom, drag to move, Esc to close.">
           <img className="scan" src={fileUrl(p.filePath)} alt={`Sheet ${h.sheet}, ${label}`} style={{ transform: `rotate(${rotate}deg)` }} />
         </button>
       ) : <div className="notice">No page here.</div>}
@@ -236,7 +240,7 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
             <p style={{ margin: 0 }}><b>Why:</b> {h.why}</p>
             <div className="col" style={{ gap: 8 }}>
               {guesses.map((g, i) => (
-                <button key={`${g.student}-${g.page}`} type="button" className={`guess ${pick === i + 1 ? 'on' : ''}`} onClick={(e) => { e.currentTarget.blur(); setPick(i + 1) }}>
+                <button key={`${g.student}-${g.page}`} type="button" className={`guess ${pick === i + 1 ? 'on' : ''}`} onClick={(e) => { blurIfMouse(e); setPick(i + 1) }}>
                   <span className="n">{i + 1}</span>
                   <span className="col" style={{ gap: 2 }}>
                     <span style={{ fontWeight: 600 }}>{g.studentName} · sheet {g.page}</span>
@@ -265,7 +269,7 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
                   {resolved.kind === 'several' && (
                     <span className="col" style={{ gap: 2 }}>
                       <span className="muted small">Which one?</span>
-                      {resolved.list.map((m) => <button key={m.code} type="button" data-choose="1" className="tab" style={{ textAlign: 'left', padding: '4px 6px' }} onClick={() => { setTyped(m.code); setSearch({ q: m.code, list: [m] }); typedRef.current?.focus() }}>{m.name} · {m.code} · {m.klass}</button>)}
+                      {resolved.list.map((m) => <button key={m.code} type="button" className="tab" style={{ textAlign: 'left', padding: '4px 6px' }} onClick={() => { setTyped(m.code); setSearch({ q: m.code, list: [m] }); typedRef.current?.focus() }}>{m.name} · {m.code} · {m.klass}</button>)}
                     </span>
                   )}
                 </span>
@@ -273,10 +277,10 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
             </div>
             {err && <p className="err" style={{ margin: 0 }}>{err}</p>}
             <div className="row" style={{ gap: 10 }}>
-              <button type="button" className="btn primary" disabled={busy || !target} title={target ? undefined : (waitingWhy ?? undefined)} onClick={(e) => { e.currentTarget.blur(); void fileIt() }}>
+              <button type="button" className="btn primary" disabled={busy || !target} title={target ? undefined : (waitingWhy ?? undefined)} onClick={(e) => { blurIfMouse(e); void fileIt() }}>
                 {target ? `File as ${target.name} · sheet ${target.page}` : 'File'} <span style={{ opacity: 0.7, marginLeft: 6 }}>Enter</span>
               </button>
-              <button type="button" className="btn" disabled={busy} onClick={(e) => { e.currentTarget.blur(); void leaveLoose() }}>
+              <button type="button" className="btn" disabled={busy} onClick={(e) => { blurIfMouse(e); void leaveLoose() }}>
                 Leave it loose <span style={{ opacity: 0.7, marginLeft: 6 }}>X</span>
               </button>
             </div>
@@ -363,7 +367,7 @@ function Packets({ data, assignment: a, onFiled }: { data: PileData; assignment:
                 const f = sheets[n - 1]?.front
                 const at = views.findIndex((v) => v.pageId === f?.id)
                 return (
-                  <button key={n} type="button" className="thumb" title="Open large, front and back" onClick={(e) => { e.currentTarget.blur(); openViewer(views, Math.max(0, at)) }} style={{ width: 96, background: 'none', border: 0, padding: 0, cursor: 'pointer', font: 'inherit' }}>
+                  <button key={n} type="button" className="thumb" title="Open large, front and back" onClick={(e) => { blurIfMouse(e); openViewer(views, Math.max(0, at)) }} style={{ width: 96, background: 'none', border: 0, padding: 0, cursor: 'pointer', font: 'inherit' }}>
                     {f ? <img src={fileUrl(f.thumbPath ?? f.filePath)} alt={`Sheet ${n}, front`} /> : <span className="notice">No page</span>}
                     <span>sheet {n}</span>
                   </button>

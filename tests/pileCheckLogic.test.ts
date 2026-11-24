@@ -41,6 +41,16 @@ describe('resolveTyped', () => {
     expect(resolveTyped('Lee', { q: 'Lee', list: [lee] }, 'W14', [])).toEqual({ kind: 'one', student: 'S03', name: 'Lee Da Yun', page: null }))
   it('asks which one when several match', () =>
     expect(resolveTyped('Lee', { q: 'Lee', list: [lee, leeMin] }, 'W14', [])).toEqual({ kind: 'several', list: [lee, leeMin] }))
+  it('keeps a settled result while more text leaves the query the same', () => {
+    expect(typedQuery('Lee ')).toBe('Lee')
+    expect(typedQuery('Lee W14 2a')).toBe('Lee')
+    expect(resolveTyped('Lee ', { q: 'Lee', list: [lee] }, 'W14', [])).toMatchObject({ kind: 'one', student: 'S03' })
+    expect(resolveTyped('Lee W14 2a', { q: 'Lee', list: [lee] }, 'W14', [])).toEqual({ kind: 'one', student: 'S03', name: 'Lee Da Yun', page: 2 })
+  })
+  it('a different name needs its own search', () => {
+    expect(typedQuery('Yoon')).not.toBe('Lee')
+    expect(resolveTyped('Yoon', { q: 'Lee', list: [lee] }, 'W14', [])).toEqual({ kind: 'searching' })
+  })
   it('says nobody matched', () => expect(resolveTyped('Zed', { q: 'Zed', list: [] }, 'W14', [])).toEqual({ kind: 'none', query: 'Zed' }))
   it('takes an exact code among several matches', () =>
     expect(resolveTyped('s03', { q: 's03', list: [lee, { ...leeMin, code: 'S030' }] }, 'W14', [])).toMatchObject({ kind: 'one', student: 'S03' }))
