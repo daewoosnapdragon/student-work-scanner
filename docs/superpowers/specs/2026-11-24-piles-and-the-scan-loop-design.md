@@ -147,8 +147,10 @@ codes; `server/piles.ts`, fully unit-tested):
    numbers, takes that student and the lowest sheet number the student still
    lacks that fits the order (an unknown between Olivia 1 and Olivia 3 is
    Olivia 2). This is **placed**. An unknown sheet between two different
-   students, or next to a run that already has every sheet, is **held** with
-   both neighbours as guesses. A sheet placed this way has `filedFrom =
+   students is **placed** when exactly one of them can still take it (lacks a
+   sheet number that fits the order), and **held** with both as guesses when
+   both can or neither can; one next to a run that already has every sheet
+   is held. A sheet placed this way has `filedFrom =
    'pile'`.
 5. *Filing.* Known and placed sheets file through the existing path (replace
    on rescan, comments carried, packets refreshed, analysis hook on complete).

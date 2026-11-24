@@ -241,13 +241,21 @@ describe('settling a pile', () => {
     expect(filed(r)).toContain('101:S012a:pile')
     expect(filed(r)).toContain('106:S012b:pile')
   })
-  it('holds a codeless sheet between two students, with both as guesses', () => {
-    const r = settlePile(input(full.map((x, i) => (i === 2 || i === 5 ? null : x))))   // S02 sheet 1: between S01 s2 and S02 s2
+  it('places a codeless sheet between two students when only one of them can take it', () => {
+    const r = settlePile(input(full.map((x, i) => (i === 2 || i === 5 ? null : x))))   // S02 sheet 1: between S01 s2 (S01 complete) and S02 s2
+    expect(r.status).toBe('done')
+    expect(filed(r)).toContain('102:S021a:pile')
+    expect(filed(r)).toContain('105:S021b:pile')
+  })
+  it('holds a codeless sheet between two students when both could take it, with both as guesses', () => {
+    // single-sided, 3 sheets: fronts S01 s1, S01 s2, ?, S02 s2, S02 s3 — S01 lacks 3 (fits after), S02 lacks 1 (fits before)
+    const W3 = { ...W, sheets: 3, twoSided: 0 }
+    const s3 = [{ page: 1, side: 'a' }, { page: 2, side: 'a' }, { page: 3, side: 'a' }] as any
+    const r = settlePile(input([ref('S01', 1, 'a'), ref('S01', 2, 'a'), null, ref('S02', 2, 'a'), ref('S02', 3, 'a')], { assignment: W3 as any, sides: s3, printed: s3 }))
     expect(r.status).toBe('checking')
     expect(held(r)).toHaveLength(1)
-    expect(held(r)[0]).toMatchObject({ sheet: 3, pageIds: [102, 105], why: expect.stringMatching(/between/) })
-    expect(held(r)[0].guesses.map((g) => `${g.student}${g.page}`).sort()).toEqual(['S011', 'S021'].sort())  // S01 lacks nothing → S02 s1 ranks first
-    expect(held(r)[0].guesses[0]).toMatchObject({ student: 'S02', page: 1 })
+    expect(held(r)[0]).toMatchObject({ sheet: 3, pageIds: [102, null], why: expect.stringMatching(/between/) })
+    expect(held(r)[0].guesses.map((g) => `${g.student}${g.page}`).sort()).toEqual(['S013', 'S021'])
   })
   it('holds a contradiction between a front and its mirror', () => {
     const r = settlePile(input(full.map((x, i) => (i === 7 ? ref('S02', 1, 'b') : x))))
@@ -289,7 +297,7 @@ describe('settling a pile', () => {
     expect(filed(r)).toContain('103:S022a:pile')
   })
   it('with no codes at all, cuts packets by sheet count and offers the roster in name order', () => {
-    const r = settlePile(input(new Array(8).fill(null)))
+    const r = settlePile(input(new Array(8).fill(null), { assignment: null, sides: [], printed: [] }))
     expect(r.status).toBe('new')
     expect(r.assignment).toBeNull()
     const named = settlePile(input(new Array(8).fill(null), { turnedIn: new Set(['S01']) }))
@@ -305,8 +313,6 @@ describe('pileAssignment', () => {
   })
 })
 ```
-
-Note for the implementer: in `input()`, when `assignment` is given but no code read, `settlePile` returns the no-codes packets (status `checking`) only when `input.assignment` is non-null; the test's first call passes `W` too, so make the first assertion use `input(…, { assignment: null, sides: [], printed: [] })`. Adjust the test accordingly before running.
 
 - [ ] **Step 2: Run to verify it fails** — `npm test -- tests/settlePile.test.ts`, FAIL: module not found.
 
@@ -359,11 +365,13 @@ describe('a PDF settles as a pile', () => {
     expect(db.reviewPages()).toEqual([])
   })
   it('holds a sheet and files it from the check', async () => {
-    // same pile but page 3 (S02 1A) and page 6 (its mirror S02 1B) have no code
+    // same pile but page 6 (the mirror of S02 1A) carries S03's code SWS1:S03:W14:1B: a contradiction
     … processInboxFile all …
     const pile = db.listPiles()[0]
     expect(pile.status).toBe('checking'); expect(pile.held).toHaveLength(1)
-    expect(pile.held[0].guesses[0]).toMatchObject({ student: 'S02', studentName: 'Bo', page: 1 })
+    expect(pile.held[0].why).toMatch(/contradict/)
+    expect(pile.held[0].guesses.map((g) => g.student).sort()).toEqual(['S02', 'S03'])
+    expect(pile.held[0].guesses[0]).toMatchObject({ student: 'S02', studentName: 'Bo', page: 1 })   // S02 fits the run around it
     pipeline.fileSheet(pile.id, pile.held[0].sheet, 'S02', 1)
     expect(db.getPile(pile.id)!.status).toBe('done')
     expect(db.packetPages('S02', 'W14').map((p) => `${p.page}${p.side}:${p.filedFrom}`).sort()).toEqual(['1a:review', '1b:review', '2a:code', '2b:code'])
@@ -449,7 +457,7 @@ it('undo deletes a packet that carries nothing', …)
 
 - [ ] **Step 1: Write the failing tests** — start the app on port 0 in `beforeAll` (export `makeApp()` from a new `server/app.ts` that `index.ts` uses; `app.listen` stays in `index.ts`); seed a student and assignment; render a held pile through the pipeline; assert `GET /api/scan` lists it with `toCheck: 1`, `GET /api/piles/:id` returns one held sheet with two pages, `POST …/sheets/:sheet/file` empties `held`, `GET /api/assignments` row has `stage: 'ready'` afterwards and `notIn` names, `POST /api/analyse/assignment/W14` with `closeIncomplete` closes an open packet (no key: expect 400 but the packet closed first — or close first and assert, then 400).
 
-- [ ] **Step 2: Run to verify it fails.** **Step 3: Implement.** Remove `/api/today`'s stats and outstanding (the hub carries `notIn`), keep `latestNoticing` per assignment (`metaWithPrefix('noticing:')`). **Step 4: All tests and typecheck pass.**
+- [ ] **Step 2: Run to verify it fails.** **Step 3: Implement.** Delete the `packets that stopped arriving` block from `tests/packets.test.ts` (its functions go). Keep `setupAssignmentFromReview` in `pipeline.ts` for the "create it from the codes" path of `POST /api/piles/:id/assignment`; only its route goes. Remove `/api/today`'s stats and outstanding (the hub carries `notIn`), keep `latestNoticing` per assignment (`metaWithPrefix('noticing:')`). **Step 4: All tests and typecheck pass.**
 
 - [ ] **Step 5: Commit** — `git commit -m "Scan and pile routes, assignment stages, stale packets retired"`
 
