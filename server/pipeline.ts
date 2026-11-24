@@ -25,7 +25,13 @@ export async function processInboxFile(file: string): Promise<string[]> {
   if (ext === '.pdf') return splitPdf(file)
   if (!IMAGE_EXT.has(ext)) return []
   const from = originOf(file)
-  await processImage(file, path.basename(file), from, from?.pile ?? null)
+  // counted as arriving for the whole of its decode, until its row is in
+  if (from?.pile) inFlight.set(file, from.pile.id)
+  try {
+    await processImage(file, path.basename(file), from, from?.pile ?? null)
+  } finally {
+    inFlight.delete(file)
+  }
   if (from?.pile) {
     const pile = getPile(from.pile.id)
     // only a pile not yet settled settles by itself; a settled one changes only by the teacher's hand
@@ -46,6 +52,7 @@ export interface PileSlot { id: number; index: number }
 // matched to its PDF by name, since the rendered name is the PDF's plus __pNN,
 // and rejoins that PDF's pile unless the pile already has a page at that place.
 const rendered = new Map<string, Origin & { pile: PileSlot | null }>()
+const inFlight = new Map<string, number>() // rendered page being decoded → its pile
 function originOf(file: string): (Origin & { pile: PileSlot | null }) | null {
   const known = rendered.get(file)
   if (known) {
@@ -69,6 +76,7 @@ function unsettled(pile: Pile) {
 }
 /** Whether pages rendered for this pile in this run are still waiting in the inbox to be decoded. */
 export function pileArriving(pileId: number): boolean {
+  for (const id of inFlight.values()) if (id === pileId) return true
   for (const [file, o] of rendered) if (o.pile?.id === pileId && fs.existsSync(file)) return true
   return false
 }
@@ -163,6 +171,11 @@ export async function processImage(file: string, sourceName: string, from: Origi
   const thumbPath = fs.existsSync(thumbAbs) ? rel(thumbAbs) : null
 
   const ref = decoded.ref
+  // the pile may have been settled while this page decoded: then it takes no more pages, and this one goes in loose
+  if (pile) {
+    const current = getPile(pile.id)
+    if (!current || !unsettled(current)) pile = null
+  }
   if (pile) {
     const dest = path.join(HOLDING_DIR, `${seq}-${sourceName}`)
     fs.renameSync(file, dest)

@@ -188,6 +188,30 @@ describe('a PDF settles as a pile', () => {
     expect(db.pilePages(pile.id)).toHaveLength(3)
   })
 
+  it('counts a page still decoding as arriving, so the pile cannot be named under it', async () => {
+    const rendered = await pipeline.processInboxFile(await pilePdf('flight.pdf', ['SWS1:S01:W14:1A', 'SWS1:S01:W14:2A', 'SWS1:S01:W14:2B', 'SWS1:S01:W14:1B']))
+    for (const f of rendered.slice(0, 3)) await pipeline.processInboxFile(f)
+    const pile = db.listPiles()[0]
+    const last = pipeline.processInboxFile(rendered[3]) // its decode is pending
+    expect(pipeline.pileArriving(pile.id)).toBe(true)
+    expect(() => filing.namePile(pile.id, 'W14')).toThrow(/still arriving, 3 of 4 pages in/)
+    await last
+    expect(pipeline.pileArriving(pile.id)).toBe(false)
+    expect(db.getPile(pile.id)!.status).toBe('done')
+    expect(db.pilePages(pile.id)).toHaveLength(4)
+  })
+
+  it('inserts a page loose when its pile was settled while it decoded', async () => {
+    const rendered = await pipeline.processInboxFile(await pilePdf('settled.pdf', new Array(2).fill(null)))
+    const pile = db.listPiles()[0]
+    db.updatePile(pile.id, { status: 'checking', settledAt: new Date().toISOString() })
+    const p = await pipeline.processImage(rendered[0], 'settled__p01.jpg', { origin: pile.origin, originPage: 1 }, { id: pile.id, index: 1 })
+    expect(p).toMatchObject({ status: 'review', pile: null, origin: pile.origin })
+    expect(p.reason).not.toBe('in pile')
+    expect(db.pilePages(pile.id)).toEqual([])
+    fs.rmSync(rendered[1])
+  })
+
   it('sends a page loose when its code reads but cannot be filed', async () => {
     db.upsertStudent({ code: 'S09', name: 'Gone', nameKo: null, klass: 'Daisy', grade: 3, homeroom: null })
     const rendered = await pipeline.processInboxFile(await pilePdf('gone.pdf', ['SWS1:S09:W14:1A', 'SWS1:S09:W14:2A', 'SWS1:S09:W14:2B', 'SWS1:S09:W14:1B']))
