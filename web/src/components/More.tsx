@@ -16,7 +16,7 @@ export default function More({ children, label = 'More' }: { children: ReactNode
   return (
     <span ref={box} className="more">
       <button ref={button} type="button" className="btn" aria-haspopup="true" aria-expanded={open} onClick={() => setOpen((v) => !v)}>{label} ▾</button>
-      {open && <div className="more-menu card" role="menu" onClick={(e) => { if ((e.target as HTMLElement).closest('a, button')) setOpen(false) }}>{children}</div>}
+      {open && <div className="more-menu card" onClick={(e) => { if ((e.target as HTMLElement).closest('a, button')) setOpen(false) }}>{children}</div>}
     </span>
   )
 }

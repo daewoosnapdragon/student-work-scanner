@@ -98,23 +98,23 @@ export default function AssignmentPage() {
             {act && act.label !== 'Open' && (
               act.kind === 'analyse' ? <button className={headCls} disabled={busy || active.length > 0} onClick={analysePrimary}>{active.length > 0 ? `Analysing… ${active.length} to go` : act.label}</button>
                 : act.kind === 'print' ? <a className={headCls} href={act.to} target="_blank" rel="noreferrer">{act.label}</a>
-                : act.label === 'Copy prompt' ? <button className={headCls} onClick={() => { setPromptOpen(true); toId('prompt') }}>{act.label}</button>
+                : act.label === 'Copy prompt' ? <button className={headCls} onClick={() => { setPromptOpen(true); setTimeout(() => toId('prompt'), 0) }}>{act.label}</button>
                 : <Link className={headCls} to={act.to}>{act.label}</Link>
             )}
             <More>
-              <button type="button" role="menuitem" onClick={() => { setEditing(true); toTop() }}>Edit</button>
-              <a role="menuitem" href={`/print/labels/${a.code}`} target="_blank" rel="noreferrer">Print labels</a>
-              {inRows.length > 0 && <a role="menuitem" href={`/api/assignments/${a.code}/pdf?download=1`}>Class PDF</a>}
-              {inRows.length > 0 && <a role="menuitem" href={`/print/overview/${a.code}`} target="_blank" rel="noreferrer">Print record</a>}
-              {inRows.length > 0 && <button type="button" role="menuitem" onClick={() => { setPromptOpen(true); setTimeout(() => toId('prompt'), 0) }}>Copy prompt</button>}
-              {inRows.length > 0 && <button type="button" role="menuitem" onClick={() => { setPasting(true); setTimeout(() => toId('paste'), 0) }}>Paste class answer</button>}
-              <button type="button" role="menuitem" onClick={() => { setRubricOpen(true); setTimeout(() => toId('rubric'), 0) }}>Edit rubric</button>
-              {inRows.length > 0 && data.rubric.scoring !== 'none' && <button type="button" role="menuitem" onClick={() => toId('anchors')}>Scoring anchors</button>}
-              {inRows.length > 0 && <button type="button" role="menuitem" onClick={() => toId('overview')}>Domains</button>}
-              <Link role="menuitem" to={`/compare?assignment=${a.code}`}>Compare two students</Link>
-              {data.analysisOn && analysed > 0 && active.length === 0 && <button type="button" role="menuitem" onClick={() => { if (window.confirm(`Analyse all ${inRows.length} packets again? Existing analysis and feedback are replaced.`)) void analyseAll(true) }}>Analyse everything again</button>}
-              {inRows.some((r) => r.packet!.feedback) && act?.kind !== 'print' && <a role="menuitem" href={`/print/feedback/${a.code}`} target="_blank" rel="noreferrer">Feedback slips</a>}
-              {inRows.length === 0 && <button type="button" role="menuitem" className="more-danger" onClick={() => void remove()}>Delete</button>}
+              <button type="button" onClick={() => { setEditing(true); toTop() }}>Edit</button>
+              <a href={`/print/labels/${a.code}`} target="_blank" rel="noreferrer">Print labels</a>
+              {inRows.length > 0 && <a href={`/api/assignments/${a.code}/pdf?download=1`}>Class PDF</a>}
+              {inRows.length > 0 && <a href={`/print/overview/${a.code}`} target="_blank" rel="noreferrer">Print record</a>}
+              {inRows.length > 0 && <button type="button" onClick={() => { setPromptOpen(true); setTimeout(() => toId('prompt'), 0) }}>Copy prompt</button>}
+              {inRows.length > 0 && <button type="button" onClick={() => { setPasting(true); setTimeout(() => toId('paste'), 0) }}>Paste class answer</button>}
+              <button type="button" onClick={() => { setRubricOpen(true); setTimeout(() => toId('rubric'), 0) }}>Edit rubric</button>
+              {inRows.length > 0 && data.rubric.scoring !== 'none' && <button type="button" onClick={() => toId('anchors')}>Scoring anchors</button>}
+              {inRows.length > 0 && <button type="button" onClick={() => toId('overview')}>Domains</button>}
+              <Link to={`/compare?assignment=${a.code}`}>Compare two students</Link>
+              {data.analysisOn && analysed > 0 && active.length === 0 && <button type="button" onClick={() => { if (window.confirm(`Analyse all ${inRows.length} packets again? Existing analysis and feedback are replaced.`)) void analyseAll(true) }}>Analyse everything again</button>}
+              {inRows.some((r) => r.packet!.feedback) && act?.kind !== 'print' && <a href={`/print/feedback/${a.code}`} target="_blank" rel="noreferrer">Feedback slips</a>}
+              {inRows.length === 0 && <button type="button" className="more-danger" onClick={() => void remove()}>Delete</button>}
             </More>
           </span>
         </div>
@@ -129,7 +129,7 @@ export default function AssignmentPage() {
         <div className="stat"><div className="over quiet">To check</div><div className="num">{data.pileId != null ? <Link to={`/scan/pile/${data.pileId}`}>{row?.toCheck ?? data.inReview}</Link> : 0}</div></div>
       </section>
 
-      <RubricCard key={`${a.code}:${JSON.stringify(data.rubric)}`} a={a} rubric={data.rubric} allDomains={data.allDomains} open={rubricOpen} setOpen={setRubricOpen} onSaved={() => { setRubricOpen(false); setBump((b) => b + 1) }} />
+      <RubricCard primary={formOwner === 'rubric'} key={`${a.code}:${JSON.stringify(data.rubric)}`} a={a} rubric={data.rubric} allDomains={data.allDomains} open={rubricOpen} setOpen={setRubricOpen} onSaved={() => { setRubricOpen(false); setBump((b) => b + 1) }} />
 
       {inRows.length > 0 && (
         <section className="col" style={{ gap: 10 }}>
@@ -334,7 +334,7 @@ function PacketPanel({ primary, s, a, onSaved, analysisOn, busyJob, domains, rat
         ))}
       </div>
       <div className="muted small">Pages out of order? The arrows move a page; sides are renumbered by position. × sends a page back to Review.</div>
-      {anchoring && <AnchorForm a={a} s={s} anchor={anchor} rubric={rubric} onDone={() => { setAnchoring(false); onSaved() }} />}
+      {anchoring && <AnchorForm primary={primary} a={a} s={s} anchor={anchor} rubric={rubric} onDone={() => { setAnchoring(false); onSaved() }} />}
       {parseCriteria(p.criteria).length > 0 && (
         <div className="row" style={{ gap: 6 }}>
           <span className="over quiet" style={{ fontSize: 10, marginRight: 4 }}>Criteria</span>
@@ -392,7 +392,7 @@ function PacketPanel({ primary, s, a, onSaved, analysisOn, busyJob, domains, rat
 }
 
 // The teacher's own score for this packet, kept as an example of that score. Every other packet is then scored against the anchors.
-function AnchorForm({ a, s, anchor, rubric, onDone }: { a: Assignment; s: Row; anchor: Anchor | null; rubric: Rubric; onDone: () => void }) {
+function AnchorForm({ primary, a, s, anchor, rubric, onDone }: { primary: boolean; a: Assignment; s: Row; anchor: Anchor | null; rubric: Rubric; onDone: () => void }) {
   const of = rubric.scoring === 'outOf' && rubric.scoreOf ? rubric.scoreOf : 4
   const [score, setScore] = useState(anchor ? String(anchor.score) : s.packet!.score != null ? String(s.packet!.score) : '')
   const [note, setNote] = useState(anchor?.note ?? '')
@@ -422,7 +422,7 @@ function AnchorForm({ a, s, anchor, rubric, onDone }: { a: Assignment; s: Row; a
         <label className="col" style={{ gap: 4, flex: 1, minWidth: 260 }}><span className="over quiet" style={{ fontSize: 10 }}>What makes it a {score || '…'} · in your words, one line</span>
           <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="every section done, two clear events, verbs mostly right" />
         </label>
-        <button type="submit" className="btn primary">{anchor ? 'Save' : 'Make anchor'}</button>
+        <button type="submit" className={`btn ${primary ? 'primary' : ''}`}>{anchor ? 'Save' : 'Make anchor'}</button>
         {anchor && <button type="button" className="btn" onClick={() => void remove()}>Remove anchor</button>}
         {err && <span className="err">{err}</span>}
       </div>
@@ -605,7 +605,7 @@ function Overview({ rows, domains, ratings, onPick }: { rows: Row[]; domains: st
 }
 
 
-function RubricCard({ a, rubric, allDomains, open, setOpen, onSaved }: { a: Assignment; rubric: Rubric; allDomains: string[]; open: boolean; setOpen: (v: boolean) => void; onSaved: () => void }) {
+function RubricCard({ primary, a, rubric, allDomains, open, setOpen, onSaved }: { primary: boolean; a: Assignment; rubric: Rubric; allDomains: string[]; open: boolean; setOpen: (v: boolean) => void; onSaved: () => void }) {
   const [r, setR] = useState<Rubric>(rubric)
   const [criteria, setCriteria] = useState(rubric.criteria.join('\n'))
   const [focus, setFocus] = useState(rubric.focus.join(', '))
@@ -664,7 +664,7 @@ function RubricCard({ a, rubric, allDomains, open, setOpen, onSaved }: { a: Assi
             {r.scoring === 'outOf' && <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Out of</span><input type="number" min={1} max={100} value={r.scoreOf ?? ''} onChange={(e) => setR({ ...r, scoreOf: Number(e.target.value) || null })} style={{ width: 70 }} /></label>}
           </div>
           <div className="muted small">The note to the student never mentions the score, whatever is chosen here.</div>
-          <div className="row"><button type="submit" className="btn primary">Save rubric</button>{saved && <span className="muted small">Saved</span>}{err && <span className="err">{err}</span>}</div>
+          <div className="row"><button type="submit" className={`btn ${primary ? 'primary' : ''}`}>Save rubric</button>{saved && <span className="muted small">Saved</span>}{err && <span className="err">{err}</span>}</div>
         </form>
       )}
     </section>
