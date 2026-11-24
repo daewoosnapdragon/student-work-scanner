@@ -7,7 +7,7 @@
 
 import { getAssignment, getPage, getPile, getStudent, listStudents, packetPages, packetsForAssignment, pilePages, printedSidesFor, sidesFor, updatePage, updatePile } from './db.js'
 import { broadcast } from './events.js'
-import { fileFromReview } from './pipeline.js'
+import { fileFromReview, pileArriving } from './pipeline.js'
 import { pairSheets, pileAssignment, settlePile, type PileInput, type SettleResult } from './piles.js'
 import type { Assignment, HeldSheet, Page, PageRef, Pile, Side } from '../shared/types.js'
 
@@ -113,7 +113,8 @@ export function applyDecisions(pile: Pile, result: SettleResult): void {
  * it has. This is also the way out for a pile that never reached its page count.
  */
 export function namePile(pileId: number, assignment: string): Pile {
-  mustPile(pileId)
+  const pile = mustPile(pileId)
+  if (pileArriving(pileId)) throw new Error(`this pile is still arriving, ${pilePages(pileId).length} of ${pile.pages} pages in`)
   const code = assignment.trim().toUpperCase()
   if (!getAssignment(code)) throw new Error(`no assignment ${code}`)
   if (pilePages(pileId).some((p) => p.status !== 'review')) throw new Error('this pile has filed pages; undo it before naming it again')

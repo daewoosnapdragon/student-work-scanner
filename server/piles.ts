@@ -98,9 +98,12 @@ export function settlePile(input: PileInput): SettleResult {
   })
 
   // Three or more sheets in a row whose codes disagree with their mirror: the pile was not fed as expected.
+  // A skipped sheet (no pages at all) breaks the run.
   let row = 0
+  let prev = 0
   for (const s of sheets) {
-    row = s.kind === 'held' ? row + 1 : 0
+    row = s.kind === 'held' ? (s.n === prev + 1 ? row + 1 : 1) : 0
+    prev = s.n
     if (row >= 3) return jumbled(input, own, decisions, loose)
   }
 

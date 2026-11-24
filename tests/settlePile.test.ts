@@ -37,6 +37,17 @@ describe('settling a pile', () => {
     expect(r).toMatchObject({ status: 'done', sheets: 4 })
     expect(filed(r).sort()).toEqual(['100:S011a:code', '103:S022a:code', '104:S022b:code', '105:S021b:code', '107:S011b:code'])
   })
+  it('does not count a run of held sheets across a missing sheet as jumbled', () => {
+    // 6 sheets; sheets 1, 3 and 4 hold a contradiction, sheet 2 (pages 2 and 11) is missing entirely, sheets 5 and 6 read clean
+    const refs: Array<PageRef | null> = [
+      ref('S01', 1, 'a'), null, ref('S02', 1, 'a'), ref('S03', 1, 'a'), ref('S01', 2, 'a'), ref('S02', 2, 'a'),
+      ref('S02', 2, 'b'), ref('S01', 2, 'b'), ref('S02', 1, 'b'), ref('S01', 1, 'b'), null, ref('S03', 2, 'b'),
+    ]
+    const pages = input(refs).pages.filter((p) => p.index !== 2 && p.index !== 11)
+    const r = settlePile(input(refs, { pages }))
+    expect(r.status).not.toBe('jumbled')
+    expect(held(r).map((d: any) => d.sheet)).toEqual([1, 3, 4])
+  })
   it('fills a side whose code missed from its mirror', () => {
     const r = settlePile(input(full.map((x, i) => (i === 7 ? null : x))))
     expect(r.status).toBe('done')

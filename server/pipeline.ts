@@ -50,7 +50,9 @@ function originOf(file: string): (Origin & { pile: PileSlot | null }) | null {
   const known = rendered.get(file)
   if (known) {
     rendered.delete(file)
-    return known
+    // a pile settled meanwhile (named by the teacher) takes no more pages: this one goes in loose
+    const pile = known.pile ? getPile(known.pile.id) : undefined
+    return pile && unsettled(pile) ? known : { ...known, pile: null }
   }
   const m = /^(.+)__p(\d{2,})\.jpe?g$/i.exec(path.basename(file))
   if (!m) return null
@@ -64,6 +66,11 @@ function originOf(file: string): (Origin & { pile: PileSlot | null }) | null {
 }
 function unsettled(pile: Pile) {
   return pile.status === 'new' && !pile.settledAt
+}
+/** Whether pages rendered for this pile in this run are still waiting in the inbox to be decoded. */
+export function pileArriving(pileId: number): boolean {
+  for (const [file, o] of rendered) if (o.pile?.id === pileId && fs.existsSync(file)) return true
+  return false
 }
 /** Forgets which rendered pages came from which PDF, as a restart does. For tests. */
 export function forgetRendered() {

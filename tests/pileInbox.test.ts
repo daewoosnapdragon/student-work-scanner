@@ -157,6 +157,37 @@ describe('a PDF settles as a pile', () => {
     expect(pile.held.map((h) => h.pages.map(at))).toEqual([[1, null], [2, 3]])
   })
 
+  it('refuses to name a pile while its pages are still arriving, and settles it by itself once they are in', async () => {
+    const rendered = await pipeline.processInboxFile(await pilePdf('arrive.pdf', ['SWS1:S01:W14:1A', 'SWS1:S01:W14:2A', 'SWS1:S01:W14:2B', 'SWS1:S01:W14:1B']))
+    for (const f of rendered.slice(0, 2)) await pipeline.processInboxFile(f)
+    const pile = db.listPiles()[0]
+    expect(() => filing.namePile(pile.id, 'W14')).toThrow(/still arriving, 2 of 4 pages in/)
+    expect(db.getPile(pile.id)!.assignment).toBeNull()
+    for (const f of rendered.slice(2)) await pipeline.processInboxFile(f)
+    expect(db.getPile(pile.id)!.status).toBe('done')
+  })
+
+  it('sends a late page of a pile that was settled meanwhile loose, never strands it in the pile', async () => {
+    // by name, after a restart: the pile was named once it stopped arriving
+    let rendered = await pipeline.processInboxFile(await pilePdf('late.pdf', new Array(4).fill(null)))
+    for (const f of rendered.slice(0, 3)) await pipeline.processInboxFile(f)
+    pipeline.forgetRendered()
+    const named = filing.namePile(db.listPiles()[0].id, 'W14')
+    expect(named.status).toBe('checking')
+    await pipeline.processInboxFile(rendered[3])
+    expect(db.reviewPages().at(-1)).toMatchObject({ sourceName: 'late__p04.jpg', pile: null })
+    expect(db.pilePages(named.id)).toHaveLength(3)
+
+    // still remembered from this run, but the pile settled meanwhile
+    rendered = await pipeline.processInboxFile(await pilePdf('late2.pdf', new Array(4).fill(null)))
+    for (const f of rendered.slice(0, 3)) await pipeline.processInboxFile(f)
+    const pile = db.listPiles()[0]
+    db.updatePile(pile.id, { status: 'checking', settledAt: new Date().toISOString() })
+    await pipeline.processInboxFile(rendered[3])
+    expect(db.reviewPages().at(-1)).toMatchObject({ sourceName: 'late2__p04.jpg', pile: null })
+    expect(db.pilePages(pile.id)).toHaveLength(3)
+  })
+
   it('sends a page loose when its code reads but cannot be filed', async () => {
     db.upsertStudent({ code: 'S09', name: 'Gone', nameKo: null, klass: 'Daisy', grade: 3, homeroom: null })
     const rendered = await pipeline.processInboxFile(await pilePdf('gone.pdf', ['SWS1:S09:W14:1A', 'SWS1:S09:W14:2A', 'SWS1:S09:W14:2B', 'SWS1:S09:W14:1B']))
