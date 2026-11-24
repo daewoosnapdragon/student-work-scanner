@@ -26,7 +26,8 @@ export function guessesFor(page: Page): Guess[] {
   // itself the best guess: filing it replaces the side already there.
   if (page.student && page.assignment && page.page && page.side) {
     const s = getStudent(page.student)
-    guesses.push({ rank: 0, student: page.student, studentName: s?.name ?? page.student, assignment: page.assignment, page: page.page, side: page.side, why: 'What the code says. Filing it replaces the scan already there.' })
+    const there = hasSide(page.student, page.assignment, page.page, page.side)
+    guesses.push({ rank: 0, student: page.student, studentName: s?.name ?? page.student, assignment: page.assignment, page: page.page, side: page.side, why: there ? 'What the code says. Filing it replaces the scan already there.' : 'What the code says.' })
     ;(guesses[0] as any)._score = 100
     candidates.delete(`${page.student}|${page.assignment}`)
   }

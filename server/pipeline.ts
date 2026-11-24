@@ -4,9 +4,9 @@ import sharp from 'sharp'
 import * as mupdf from 'mupdf'
 import { ARCHIVE_DIR, DATA_DIR, HOLDING_DIR, INBOX_DIR, INCOMPLETE_AFTER_MIN, ORIGINALS_DIR, PDF_DPI, THUMBS_DIR } from './config.js'
 import { decodePage, makeThumb } from './decode.js'
-import { deletePacket, getAssignment, getStudent, insertPage, moveAnnotations, nextSeq, openPackets, packetPages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
+import { closePacketIncomplete, deletePacket, getAssignment, getStudent, insertPage, upsertAssignment, moveAnnotations, nextSeq, openPackets, packetPages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
 import { broadcast } from './events.js'
-import type { Packet, Page, PageRef, Side } from '../shared/types.js'
+import type { Assignment, Packet, Page, PageRef, Side } from '../shared/types.js'
 import { shortSide } from './codes.js'
 
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.tif', '.tiff', '.webp', '.bmp'])
@@ -203,6 +203,40 @@ export function fileFromReview(pageId: number, ref: PageRef, allowDuplicate = fa
   return updated
 }
 
+// Pages whose code named an assignment that was never set up: the codes say
+// which students, how many sheets and whether there are backs, so the
+// assignment is made from them and every one of those pages is filed.
+export function setupAssignmentFromReview(code: string, given: { title?: string | null; klass?: string | null; grade?: number | null }): { assignment: Assignment; filed: number; failed: Array<{ pageId: number; error: string }> } {
+  code = code.toUpperCase()
+  const pages = reviewPages().filter((p) => p.assignment === code && p.student && p.page && p.side).sort((a, b) => a.seq - b.seq)
+  if (!pages.length) throw new Error(`no pages waiting for ${code}`)
+  if (!getAssignment(code)) {
+    const students = pages.map((p) => getStudent(p.student!)).filter((s): s is NonNullable<typeof s> => !!s)
+    const klass = given.klass?.trim() || mostCommon(students.map((s) => s.klass)) || 'Class'
+    const grade = given.grade ?? mostCommon(students.map((s) => s.grade).filter((g): g is number => g != null)) ?? null
+    upsertAssignment({
+      code, title: given.title?.trim() || code, klass, grade, assignedOn: new Date().toISOString().slice(0, 10),
+      sheets: Math.max(1, ...pages.map((p) => p.page!)), twoSided: pages.some((p) => p.side === 'b') ? 1 : 0, tags: '', notes: null,
+    })
+  }
+  let filed = 0
+  const failed: Array<{ pageId: number; error: string }> = []
+  for (const p of pages) {
+    try {
+      fileFromReview(p.id, { student: p.student!, assignment: code, page: p.page!, side: p.side! }, true)
+      filed++
+    } catch (err) {
+      failed.push({ pageId: p.id, error: (err as Error).message })
+    }
+  }
+  return { assignment: getAssignment(code)!, filed, failed }
+}
+function mostCommon<T>(xs: T[]): T | undefined {
+  const n = new Map<T, number>()
+  for (const x of xs) n.set(x, (n.get(x) ?? 0) + 1)
+  return [...n.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+}
+
 // Set by the server at startup: what happens when a packet completes (the analysis step, when it is on).
 let onComplete: ((packet: Packet) => void) | null = null
 export function setOnPacketComplete(fn: (packet: Packet) => void) { onComplete = fn }
@@ -274,6 +308,16 @@ export function skipAllInReview(notWork = false): number {
 export function stalePackets(now = Date.now()) {
   const cutoff = now - INCOMPLETE_AFTER_MIN * 60_000
   return openPackets().filter((p) => p.sides > 0 && Date.parse(p.lastAt) < cutoff)
+}
+
+// Every packet that stopped arriving is filed as it is, in one go: the sides
+// that came stay filed, a side that turns up later still joins, and nothing
+// waits in review for it any more.
+export function closeStalePackets(now = Date.now()): number {
+  const stale = stalePackets(now)
+  for (const p of stale) closePacketIncomplete(p.student, p.assignment)
+  if (stale.length) broadcast('review', { closedPackets: stale.length })
+  return stale.length
 }
 
 function duplicateOf(ref: PageRef): Page | undefined {

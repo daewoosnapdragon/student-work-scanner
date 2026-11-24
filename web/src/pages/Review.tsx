@@ -49,6 +49,9 @@ export default function Review() {
   const [rotate, setRotate] = useState(0)
   const [zoom, setZoom] = useState(false)
   const typedRef = useRef<HTMLInputElement>(null)
+  const itemRef = useRef<HTMLElement>(null)
+  const [setupTitle, setSetupTitle] = useState('')
+  const [busy, setBusy] = useState(false)
   const { open: openViewer } = useViewer()
 
   const items = data?.items ?? []
@@ -141,6 +144,40 @@ export default function Review() {
       setErr((e as Error).message)
     }
   }
+  // An assignment the codes name but nobody set up: made from the pages waiting for it, which are then filed.
+  const missingAssignment = item?.kind === 'page' && /has not been set up/.test(item.problem) ? item.assignment : null
+  const waitingForMissing = missingAssignment ? items.filter((i) => i.kind === 'page' && i.assignment === missingAssignment).length : 0
+  async function setupAssignment() {
+    if (!missingAssignment || busy) return
+    setBusy(true)
+    setErr(null)
+    try {
+      const r = await post<{ filed: number; failed: Array<{ error: string }> }>('/api/review/setup-assignment', { code: missingAssignment, title: setupTitle })
+      if (r.failed.length) setErr(`${r.filed} filed; ${r.failed.length} could not be: ${r.failed[0].error}`)
+      setSetupTitle('')
+      setBump((b) => b + 1)
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const packetItems = items.filter((i) => i.kind === 'packet').length
+  async function closeAllPackets() {
+    if (!packetItems) return
+    if (!window.confirm(`Close all ${packetItems} incomplete packets as they are? The pages that came stay filed; a missing side scanned later still joins its packet.`)) return
+    try {
+      await post('/api/review/packets/close-all', {})
+      setIdx(0)
+      setBump((b) => b + 1)
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+  function show(i: number) {
+    setIdx(i)
+    itemRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
   async function skip(notWork = false) {
     if (!item || item.kind !== 'page') return
     try {
@@ -202,7 +239,7 @@ export default function Review() {
         </div>
       )}
       {item && (
-        <section className="grid2" style={{ gridTemplateColumns: 'minmax(0, 3fr) minmax(0, 2fr)', gap: 32 }}>
+        <section ref={itemRef} className="grid2" style={{ gridTemplateColumns: 'minmax(0, 3fr) minmax(0, 2fr)', gap: 32, scrollMarginTop: 80 }}>
           <div className="col">
             <div className="between">
               <div className="over">Item {idx + 1} of {items.length}</div>
@@ -220,7 +257,10 @@ export default function Review() {
                 </button>
               </div>
             ) : (
-              <div className="notice">This is a packet, not a page: {item.student} on {item.assignment}. The pages that did arrive are on <Link to={`/assignments/${item.assignment}`}>the assignment</Link>.</div>
+              <div className="notice col" style={{ gap: 8 }}>
+                <span>This is a packet, not a page: {item.guesses[0]?.studentName ?? item.student} on {item.assignment}. The pages that did arrive are on <Link to={`/assignments/${item.assignment}`}>the assignment</Link>.</span>
+                <span>Closing it as it is keeps those pages filed and takes it off this list; if the missing side turns up in a later scan, it still joins the packet.</span>
+              </div>
             )}
             {page && (
               <div className="row">
@@ -237,6 +277,15 @@ export default function Review() {
               <div className="over">Why it is here</div>
               <p style={{ margin: 0 }}>{item.problem}.</p>
             </div>
+            {missingAssignment && (
+              <form className="notice col" style={{ gap: 8, borderStyle: 'solid', borderColor: 'var(--accent)' }} onSubmit={(e) => { e.preventDefault(); void setupAssignment() }}>
+                <span>{waitingForMissing === 1 ? 'One page here names' : `${waitingForMissing} pages here name`} <b>{missingAssignment}</b>. Set it up from them (class, sheets and sides read off the codes) and they all file themselves.</span>
+                <div className="row" style={{ gap: 8 }}>
+                  <input type="text" value={setupTitle} onChange={(e) => setSetupTitle(e.target.value)} placeholder={`Title (or just ${missingAssignment})`} style={{ flex: 1 }} />
+                  <button type="submit" className="btn primary" disabled={busy}>{busy ? 'Filing' : `Set up ${missingAssignment} and file ${waitingForMissing}`}</button>
+                </div>
+              </form>
+            )}
             {item.kind === 'page' && (
               <label className="col" style={{ gap: 4 }}>
                 <span className="over">Type what the label says</span>
@@ -299,7 +348,7 @@ export default function Review() {
             {err && <p className="err" style={{ margin: 0 }}>{err}{/already has/.test(err) && <> · <button className="btn" onClick={() => void fileIt(true)}>Replace the existing scan</button></>}</p>}
             <div className="row" style={{ gap: 10 }}>
               <button className="btn primary" onClick={() => void fileIt()}>
-                {item.kind === 'packet' ? `File as ${item.guesses[0]?.why.replace(/^File as /, '').replace(/\.$/, '')}` : target?.student ? `File as ${targetStudent?.name ?? target.student}${target.assignment ? ` · ${target.assignment}` : ''} · ${sideLabel(target.page, target.side)}` : 'File'} <span style={{ opacity: 0.7, marginLeft: 6 }}>Enter</span>
+                {item.kind === 'packet' ? `Close as it is, ${item.guesses[0]?.why.replace(/^File as /, '').replace(/\.$/, '')} sides` : target?.student ? `File as ${targetStudent?.name ?? target.student}${target.assignment ? ` · ${target.assignment}` : ''} · ${sideLabel(target.page, target.side)}` : 'File'} <span style={{ opacity: 0.7, marginLeft: 6 }}>Enter</span>
               </button>
               {item.kind === 'page' && <><button className="btn" onClick={() => void skip()}>Skip</button><button className="btn" onClick={() => void skip(true)}>Not student work</button></>}
             </div>
@@ -312,18 +361,20 @@ export default function Review() {
           <div className="over">The queue</div>
           <div className="row">
             {uncoded > 1 && <Link className="btn primary" to="/review/stack" title="Pages scanned in order without codes: one assignment, cut into packets, a student each">File a stack</Link>}
+            {packetItems > 1 && <button className="btn" onClick={() => void closeAllPackets()} title="Packets missing a side: keep what came, take them off this list">Close all {packetItems} incomplete packets</button>}
             {items.some((i) => i.kind === 'page') && <button className="btn" onClick={() => void skipAll()}>Skip everything in the queue</button>}
           </div>
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table>
-            <thead><tr><th style={{ width: 40 }}></th><th style={{ width: 100 }}>Scanned</th><th>From</th><th>Problem</th><th>Best guess</th><th style={{ width: 90 }}>Waiting</th></tr></thead>
+            <thead><tr><th style={{ width: 40 }}></th><th style={{ width: 56 }}></th><th style={{ width: 100 }}>Scanned</th><th>From</th><th>Problem</th><th>Best guess</th><th style={{ width: 90 }}>Waiting</th></tr></thead>
             <tbody>
               {items.map((it, i) => {
                 const p = it.pageId ? data.pages[it.pageId] : undefined
                 return (
-                  <tr key={`${it.kind}-${it.pageId ?? `${it.student}-${it.assignment}`}`} onClick={() => setIdx(i)} style={{ cursor: 'pointer', background: i === idx ? 'var(--paper)' : undefined }}>
+                  <tr key={`${it.kind}-${it.pageId ?? `${it.student}-${it.assignment}`}`} onClick={() => show(i)} style={{ cursor: 'pointer', background: i === idx ? 'var(--paper)' : undefined }}>
                     <td className="serif" style={{ fontSize: 18, color: 'var(--accent)' }}>{i + 1}</td>
+                    <td style={{ padding: '4px 6px' }}>{p && <img src={fileUrl(p.thumbPath ?? p.filePath)} alt="" title="Click the row to see it large" style={{ width: 44, height: 58, objectFit: 'cover', objectPosition: 'top', border: '1px solid var(--line)', background: '#fff', display: 'block' }} />}</td>
                     <td className="muted">{fmtTime(it.scannedAt)}</td>
                     <td className="muted small">{p ? originLabel(p) : `${it.student} · ${it.assignment}`}</td>
                     <td>{it.problem}</td>
@@ -332,7 +383,7 @@ export default function Review() {
                   </tr>
                 )
               })}
-              {items.length === 0 && <tr><td colSpan={6} className="muted">Empty.</td></tr>}
+              {items.length === 0 && <tr><td colSpan={7} className="muted">Empty.</td></tr>}
             </tbody>
           </table>
         </div>

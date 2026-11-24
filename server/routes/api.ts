@@ -10,7 +10,7 @@ import {
 } from '../db.js'
 import { broadcast, subscribe } from '../events.js'
 import { guessesFor } from '../guesses.js'
-import { abs, fileFromReview, reorderPacket, skipAllInReview, skipFromReview, stalePackets, unfilePage } from '../pipeline.js'
+import { abs, closeStalePackets, fileFromReview, setupAssignmentFromReview, reorderPacket, skipAllInReview, skipFromReview, stalePackets, unfilePage } from '../pipeline.js'
 import { buildPdf } from '../pdf.js'
 import { classPrompt, splitClassAnswer, splitStudentSection } from '../analysis.js'
 import { enqueueAssignment, enqueueClass, enqueuePacket, getSettings, queueStatus, saveSettings, testKey, domainList, domainsFor, LEVELS, anchorsFor } from '../claude.js'
@@ -448,7 +448,7 @@ api.get('/review', (_req, res) => {
     const missing = a ? sidesFor(a).filter((e) => !have.has(`${e.page}${e.side}`)) : []
     items.push({
       kind: 'packet', pageId: null, student: pk.student, assignment: pk.assignment, scannedAt: pk.lastAt,
-      problem: `Packet incomplete after ${Math.round((Date.now() - Date.parse(pk.lastAt)) / 3600000)} hours; ${missing.map((m) => sideLabel(m.page, m.side)).join(' and ')} never arrived`,
+      problem: `Packet incomplete after ${waitedFor(pk.lastAt)}; ${missing.map((m) => sideLabel(m.page, m.side)).join(' and ')} never arrived`,
       guesses: [{ rank: 1, student: pk.student, studentName: students.get(pk.student)?.name ?? pk.student, assignment: pk.assignment, page: null, side: null, why: `File as ${pk.sides} of ${pk.expected}.` }],
       waitingSince: pk.lastAt,
     })
@@ -458,6 +458,12 @@ api.get('/review', (_req, res) => {
   res.json({ items, pages, assignments: listAssignments(), filedThisWeek: filedFromReviewThisWeek(), autoThisWeek: autoFiledThisWeek() })
 })
 
+function waitedFor(since: string) {
+  const h = Math.round((Date.now() - Date.parse(since)) / 3600000)
+  if (h < 48) return `${h} hour${h === 1 ? '' : 's'}`
+  const d = Math.round(h / 24)
+  return `${d} days`
+}
 function filedFromReviewThisWeek() {
   return pagesSince(new Date(Date.now() - 7 * 86400_000).toISOString()).filter((p) => p.filedFrom === 'review').length
 }
@@ -505,6 +511,22 @@ api.post('/review/:id/skip', (req, res) => {
   } catch (err) {
     res.status(400).json({ error: (err as Error).message })
   }
+})
+
+// An assignment the codes name but nobody set up: made from the waiting pages, which are then filed.
+api.post('/review/setup-assignment', (req, res) => {
+  const b = req.body ?? {}
+  if (!b.code) return res.status(400).json({ error: 'the assignment code is required' })
+  try {
+    res.json(setupAssignmentFromReview(String(b.code), { title: b.title ?? null, klass: b.klass ?? null, grade: b.grade == null || b.grade === '' ? null : Number(b.grade) }))
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message })
+  }
+})
+
+// Every packet that stopped arriving, filed as it is.
+api.post('/review/packets/close-all', (_req, res) => {
+  res.json({ closed: closeStalePackets() })
 })
 
 api.post('/review/packet/:assignment/:student/close', (req, res) => {
