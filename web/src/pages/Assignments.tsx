@@ -35,8 +35,12 @@ export default function Assignments() {
 
   const [rowErr, setRowErr] = useState<Record<string, string>>({})
 
+  const [busy, setBusy] = useState<string | null>(null)
+
   async function analyse(a: Row) {
-    if (a.missingSide > 0 && !window.confirm(`${a.missingSide} packets are missing a side. Analyse them as they are?`)) return
+    if (busy) return
+    if (a.missingSide > 0 && !window.confirm(a.missingSide === 1 ? '1 packet is missing a side. Analyse it as it is?' : `${a.missingSide} packets are missing a side. Analyse them as they are?`)) return
+    setBusy(a.code)
     try {
       setRowErr((r) => ({ ...r, [a.code]: '' }))
       await post(`/api/analyse/assignment/${a.code}`, a.missingSide > 0 ? { closeIncomplete: true } : {})
@@ -44,6 +48,8 @@ export default function Assignments() {
     } catch (e) {
       setRowErr((r) => ({ ...r, [a.code]: (e as Error).message }))
       setBump((b) => b + 1)
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -87,10 +93,9 @@ export default function Assignments() {
                   <div className="muted small">{a.waiting ? 'Printed, nothing scanned yet' : stageLine(a)}</div>
                 </div>
                 <div className="row" style={{ flexShrink: 0 }}>
-                  {act.kind === 'analyse' ? <button className={cls} onClick={() => void analyse(a)}>{act.label}</button>
+                  {act.kind === 'analyse' ? <button className={cls} disabled={busy !== null} onClick={() => void analyse(a)}>{act.label}</button>
                     : act.kind === 'print' ? <a className={cls} href={act.to} target="_blank" rel="noreferrer">{act.label}</a>
                     : <Link className={cls} to={act.to}>{act.label}</Link>}
-                  <a className="btn" href={`/print/labels/${a.code}`} target="_blank" rel="noreferrer">Labels</a>
                   {a.turnedIn === 0 && <button className="btn" onClick={() => void remove(a)} title="Delete this assignment. Only possible while nothing has been scanned for it.">Delete</button>}
                 </div>
               </div>
