@@ -144,6 +144,7 @@ api.get('/assignments', (_req, res) => {
       notIn: roster.filter((s) => !have.has(s.code)).map((s) => s.name),
       noticing: noticingFor(a.code),
       pileId: open[0]?.id ?? null,
+      feedbackPrintedOn: packets.reduce<string | null>((m, p) => (p.feedbackPrintedAt && (!m || p.feedbackPrintedAt > m) ? p.feedbackPrintedAt : m), null),
     }
   })
   res.json(rows)
