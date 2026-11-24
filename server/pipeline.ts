@@ -277,7 +277,8 @@ export function restoreReplaced(oldPageId: number): Page {
     if (liveThere) fs.renameSync(aside, live)
     throw err
   }
-  updatePage(by.id, { status: 'review', reason: 'undone', filedFrom: null, ...(liveThere ? { filePath: rel(aside) } : {}) })
+  // a holding path even when its file was gone: the archive path now holds the restored scan
+  updatePage(by.id, { status: 'review', reason: 'undone', filedFrom: null, filePath: rel(aside) })
   moveAnnotations(by.id, old.id)
   updatePage(old.id, { status: 'filed', filePath: rel(archive), reason: null })
   if (old.student && old.assignment) refreshPacket(old.student, old.assignment, old.scannedAt)
@@ -408,7 +409,8 @@ export function unfilePage(pageId: number): Page {
   if (p.status !== 'filed' || !p.student || !p.assignment) throw new Error('page is not filed')
   const dest = path.join(HOLDING_DIR, `${p.seq}-${p.sourceName}`)
   fs.renameSync(abs(p.filePath), dest)
-  updatePage(pageId, { status: 'review', filePath: rel(dest), reason: `Sent back from ${p.student} · ${p.assignment}`, filedFrom: null, decoded: null, student: null, assignment: null, page: null, side: null })
+  // out of its pile too, so it is a loose page the Scan screen and Loose pages show
+  updatePage(pageId, { status: 'review', pile: null, filePath: rel(dest), reason: `Sent back from ${p.student} · ${p.assignment}`, filedFrom: null, decoded: null, student: null, assignment: null, page: null, side: null })
   emptyOrDeletePacket(p.student, p.assignment)
   const updated = getPage(pageId)!
   broadcast('review', updated)

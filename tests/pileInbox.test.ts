@@ -291,10 +291,12 @@ describe('undo', () => {
   })
 
   it('undo takes back not_work pages, marks held pages, leaves loose pages loose, and tolerates a second undo', async () => {
-    assignment('W24')
-    const pile = await settledPile('undo-mixed.pdf', codesFor('S01', 'W24'))
-    const [a, b, c, d] = db.pilePages(pile.id)
-    db.updatePage(a.id, { status: 'not_work', student: null, assignment: null, page: null, side: null })
+    // sheet 2's back was never printed, so its codeless back is set aside as not work by the settle itself
+    db.upsertAssignment({ code: 'W24', title: 'W24', klass: 'Daisy', grade: 3, assignedOn: null, sheets: 2, twoSided: 1, tags: '', notes: null, sides: 3 })
+    const pile = await settledPile('undo-mixed.pdf', ['SWS1:S01:W24:1A', 'SWS1:S01:W24:2A', null as unknown as string, 'SWS1:S01:W24:1B'])
+    const [d, b, a, c] = db.pilePages(pile.id)
+    expect(db.getPage(a.id)).toMatchObject({ status: 'not_work', pile: pile.id })
+    expect(db.reviewPages().some((p) => p.id === a.id)).toBe(false)
     db.updatePage(b.id, { status: 'review', reason: 'held for a check', student: null, assignment: null, page: null, side: null })
     db.updatePage(c.id, { status: 'review', pile: null, reason: 'left loose', student: null, assignment: null, page: null, side: null })
     filing.undoPile(pile.id)
@@ -318,5 +320,44 @@ describe('undo', () => {
     expect(db.getPacket('S02', 'W25')).toMatchObject({ sides: 0, complete: 0, note: 'Good start' })
     filing.undoPile(pile.id)
     expect(db.getPacket('S02', 'W25')).toMatchObject({ sides: 0, note: 'Good start' })
+  })
+
+  it('undo takes back the pages the settle sent loose, but not those the teacher sent loose or back', async () => {
+    assignment('W27')
+    assignment('W28')
+    // odd page count for a two-sided assignment: jumbled, so the codeless page and the W28 page went loose
+    const pile = await settledPile('undo-jumbled.pdf', ['SWS1:S01:W27:1A', null as unknown as string, 'SWS1:S02:W28:1A'])
+    expect(db.getPile(pile.id)!.status).toBe('jumbled')
+    const fromPile = () => db.reviewPages().filter((p) => p.sourceName.startsWith('undo-jumbled__'))
+    expect(fromPile().map((p) => p.pile)).toEqual([null, null])
+    filing.undoPile(pile.id)
+    const pages = db.pilePages(pile.id)
+    expect(pages).toHaveLength(3)
+    expect(pages.every((p) => p.status === 'review' && p.reason === 'in pile')).toBe(true)
+    expect(pages.map((p) => p.assignment)).toEqual(['W27', null, 'W28'])
+
+    // settled again: a page the teacher sends back from its packet is loose, and stays loose through an undo
+    filing.namePile(pile.id, 'W27')
+    const filed = db.pilePages(pile.id).find((p) => p.status === 'filed')!
+    pipeline.unfilePage(filed.id)
+    expect(db.getPage(filed.id)).toMatchObject({ status: 'review', pile: null })
+    expect(db.reviewPages().filter((p) => p.pile == null).map((p) => p.id)).toContain(filed.id)
+    filing.undoPile(pile.id)
+    expect(db.getPage(filed.id)).toMatchObject({ status: 'review', pile: null, reason: expect.stringMatching(/^Sent back from/) })
+    expect(db.pilePages(pile.id)).toHaveLength(2)
+  })
+
+  it('settles a pile with one sheet by its codes, never as a no-codes packet', async () => {
+    assignment('W29')
+    const pile = await settledPile('one-sheet.pdf', ['SWS1:S02:W29:1A', 'SWS1:S02:W29:1B'])
+    expect(db.getPile(pile.id)).toMatchObject({ status: 'done', held: [], mode: null })
+    expect(db.packetPages('S02', 'W29').map((p) => `${p.page}${p.side}:${p.filedFrom}`)).toEqual(['1a:code', '1b:code'])
+    expect(db.getPacket('S01', 'W29')).toBeUndefined()
+  })
+  it('marks a pile with no codes at all as packets', async () => {
+    await processAll(await pilePdf('mode.pdf', new Array(2).fill(null)))
+    const pile = filing.namePile(db.listPiles()[0].id, 'W29')
+    expect(pile).toMatchObject({ status: 'checking', mode: 'packets' })
+    expect(filing.undoPile(pile.id).mode).toBeNull()
   })
 })

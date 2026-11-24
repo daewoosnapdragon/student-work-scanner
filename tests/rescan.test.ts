@@ -90,4 +90,15 @@ describe('scanning a filed side again', () => {
     expect(fs.existsSync(path.join(tmp, c.filePath))).toBe(true)
     expect(fs.existsSync(path.join(tmp, db.getPage(b.id)!.filePath))).toBe(true)
   })
+  it('restores a scan whose replacer\'s file is gone, and the replacer no longer points at the restored file', async () => {
+    const first = await pipeline.processImage(await codedPage('k.jpg', 'SWS1:S07:W22:1A', '#ffffff'), 'k.jpg')
+    const again = await pipeline.processImage(await codedPage('l.jpg', 'SWS1:S07:W22:1A', '#dddddd'), 'l.jpg')
+    fs.rmSync(path.join(tmp, again.filePath)) // the live file is missing
+    const restored = pipeline.restoreReplaced(first.id)
+    expect(restored.filePath).toBe(again.filePath)
+    const by = db.getPage(again.id)!
+    expect(by.status).toBe('review')
+    expect(by.filePath).not.toBe(restored.filePath)
+    expect(by.filePath.startsWith('holding/')).toBe(true)
+  })
 })

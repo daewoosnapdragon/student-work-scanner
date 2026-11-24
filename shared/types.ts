@@ -46,7 +46,8 @@ export interface Assignment {
 }
 
 export type PileStatus = 'new' | 'checking' | 'done' | 'jumbled'
-export interface HeldGuess { student: string; studentName: string; page: number; why: string }
+/** already: set by GET /api/piles/:id when the student has that sheet on file, so filing the guess replaces it */
+export interface HeldGuess { student: string; studentName: string; page: number; why: string; already?: boolean }
 export interface HeldSheet { sheet: number; pages: [number, number | null]; why: string; guesses: HeldGuess[] }
 export interface Pile {
   id: number
@@ -58,6 +59,8 @@ export interface Pile {
   twoSided: number | null
   status: PileStatus
   held: HeldSheet[]
+  /** 'packets': no page read a code for the assignment, so the check offers packets in name order (§1.6); null otherwise */
+  mode: 'packets' | null
   createdAt: string
   settledAt: string | null
 }

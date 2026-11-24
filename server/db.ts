@@ -90,6 +90,7 @@ function migrate(d: DatabaseSync) {
     twoSided INTEGER,
     status TEXT NOT NULL DEFAULT 'new',
     held TEXT,
+    mode TEXT,
     createdAt TEXT NOT NULL,
     settledAt TEXT
   );
@@ -150,6 +151,8 @@ function migrate(d: DatabaseSync) {
   if (!pgcols.includes('pile')) d.exec('ALTER TABLE pages ADD COLUMN pile INTEGER')
   if (!pgcols.includes('pileIndex')) d.exec('ALTER TABLE pages ADD COLUMN pileIndex INTEGER')
   d.exec('CREATE INDEX IF NOT EXISTS pages_pile ON pages(pile, pileIndex)')
+  const pilecols = (d.prepare('PRAGMA table_info(piles)').all() as Array<{ name: string }>).map((c) => c.name)
+  if (!pilecols.includes('mode')) d.exec('ALTER TABLE piles ADD COLUMN mode TEXT')
   const pcols = (d.prepare('PRAGMA table_info(packets)').all() as Array<{ name: string }>).map((c) => c.name)
   if (!pcols.includes('feedbackPrintedAt')) d.exec('ALTER TABLE packets ADD COLUMN feedbackPrintedAt TEXT')
   if (!pcols.includes('feedback')) d.exec('ALTER TABLE packets ADD COLUMN feedback TEXT')
@@ -342,7 +345,7 @@ export function hasSide(student: string, assignment: string, page: number, side:
 
 // ---------- piles ----------
 function pileRow(r: any): Pile {
-  return { ...r, held: r.held ? (JSON.parse(r.held) as HeldSheet[]) : [] }
+  return { ...r, mode: r.mode ?? null, held: r.held ? (JSON.parse(r.held) as HeldSheet[]) : [] }
 }
 export function insertPile(p: { origin: string; name: string; pages: number }): Pile {
   const r = getDb()

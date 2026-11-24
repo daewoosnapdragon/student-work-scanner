@@ -201,7 +201,7 @@ describe('settling a pile: review fixes', () => {
     const [first, second] = held(r)
     expect(`${first.guesses[0].student}${first.guesses[0].page}`).toBe('S012')
     expect(`${second.guesses[0].student}${second.guesses[0].page}`).toBe('S021')
-    expect(second.guesses.at(-1)!.page).toBe(3)            // the extra page past Ara's last sheet comes last
+    expect(second.guesses.every((g) => g.page <= 2)).toBe(true) // no guess past the assignment's last sheet
     expect(first.guesses.every((g) => g.page >= 1)).toBe(true)
     expect(first.why).not.toMatch(/could belong to either/)
   })
@@ -210,5 +210,51 @@ describe('settling a pile: review fixes', () => {
     const r = settlePile(input([other, null, null, null, null, null, null, { ...other, side: 'b' }]))
     expect(r.decisions.filter((d) => d.kind === 'loose').map((d: any) => d.pageId).sort()).toEqual([100, 107])
     expect(r.packets).toEqual([{ sheets: [2, 3], student: 'S01' }, { sheets: [4], student: 'S02' }])
+  })
+})
+
+describe('settling a pile: final review fixes', () => {
+  const W1 = { ...W, sheets: 1 }
+  const s1 = [{ page: 1, side: 'a' }, { page: 1, side: 'b' }] as any
+  it('files a pile of one student\'s one sheet by its codes, not as a no-codes packet', () => {
+    const r = settlePile(input([ref('S02', 1, 'a'), ref('S02', 1, 'b')], { assignment: W1 as any, sides: s1, printed: s1 }))
+    expect(r.packets).toBeUndefined()
+    expect(r.status).toBe('done')
+    expect(filed(r)).toEqual(['100:S021a:code', '101:S021b:code'])
+  })
+  it('files a single read code and places the rest from it, with no packets', () => {
+    // two sheets, two-sided: only the front of sheet 1 read (S02); sheet 2 sits after it and S02 lacks sheet 2
+    const r = settlePile(input([ref('S02', 1, 'a'), null, null, null]))
+    expect(r.packets).toBeUndefined()
+    expect(r.status).toBe('done')
+    expect(filed(r).sort()).toEqual(['100:S021a:code', '101:S022a:pile', '102:S022b:pile', '103:S021b:pile'])
+  })
+  it('holds what one read code cannot place, still without packets', () => {
+    // one sheet only, S02 has it: the codeless sheets after it fit nobody
+    const r = settlePile(input([ref('S02', 1, 'a'), null, null, null, null, ref('S02', 1, 'b')], { assignment: W1 as any, sides: s1, printed: s1 }))
+    expect(r.packets).toBeUndefined()
+    expect(filed(r)).toEqual(['100:S021a:code', '105:S021b:code'])
+    expect(held(r).map((h) => h.sheet)).toEqual([2, 3])
+  })
+  it('holds a pile whose only codes contradict, rather than cutting it into packets', () => {
+    const r = settlePile(input([ref('S01', 1, 'a'), ref('S02', 1, 'b')], { assignment: W1 as any, sides: s1, printed: s1 }))
+    expect(r.packets).toBeUndefined()
+    expect(held(r)).toHaveLength(1)
+  })
+  it('drops a guess past the assignment\'s last sheet', () => {
+    // single-sided, 2 sheets: Ara has both, then a codeless sheet at the end of the pile
+    const W2 = { ...W, twoSided: 0 }
+    const s2 = [{ page: 1, side: 'a' }, { page: 2, side: 'a' }] as any
+    const r = settlePile(input([ref('S01', 1, 'a'), ref('S01', 2, 'a'), null], { assignment: W2 as any, sides: s2, printed: s2 }))
+    expect(held(r)).toHaveLength(1)
+    expect(held(r)[0].guesses).toEqual([])
+  })
+  it('sends a page whose code names a sheet the assignment does not have loose', () => {
+    const r = settlePile(input([ref('S01', 1, 'a'), ref('S01', 3, 'a'), ref('S01', 3, 'b'), ref('S01', 1, 'b')]))
+    expect(r.decisions.filter((d) => d.kind === 'loose').map((d: any) => [d.pageId, d.why])).toEqual([
+      [101, 'its code says sheet 3, but W14 has 2'],
+      [102, 'its code says sheet 3, but W14 has 2'],
+    ])
+    expect(filed(r)).toEqual(['100:S011a:code', '103:S011b:code'])
   })
 })

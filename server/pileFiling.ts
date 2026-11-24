@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { HOLDING_DIR } from './config.js'
 import { parseCode } from './codes.js'
-import { emptyOrDeletePacket, getAssignment, getDb, getPage, getPile, getStudent, listStudents, packetPages, packetsForAssignment, pilePages, printedSidesFor, sidesFor, updatePage, updatePile } from './db.js'
+import { emptyOrDeletePacket, getAssignment, getDb, getPage, getPile, getStudent, listStudents, packetPages, packetsForAssignment, pagesOfPileOrOrigin, pilePages, printedSidesFor, sidesFor, updatePage, updatePile } from './db.js'
 import { broadcast } from './events.js'
 import { abs, fileFromReview, pileArriving, rel, restoreReplaced } from './pipeline.js'
 import { pairSheets, pileAssignment, settlePile, type PileInput, type SettleResult } from './piles.js'
@@ -52,7 +52,7 @@ function contextFor(a: Assignment): Omit<PileInput, 'pages' | 'pageCount' | 'ass
 export function applyDecisions(pile: Pile, result: SettleResult): void {
   if (result.status === 'new' || !result.assignment || !getAssignment(result.assignment)) {
     // Nothing is decided until the pile has an assignment; its pages wait in it.
-    updatePile(pile.id, { status: 'new', assignment: null, sheets: null, twoSided: null, held: [], settledAt: null })
+    updatePile(pile.id, { status: 'new', assignment: null, sheets: null, twoSided: null, held: [], mode: null, settledAt: null })
     return
   }
   const inReview = (id: number) => getPage(id)?.status === 'review'
@@ -73,7 +73,8 @@ export function applyDecisions(pile: Pile, result: SettleResult): void {
         updatePage(d.pageId, { pile: null, reason: (err as Error).message })
       }
     } else if (d.kind === 'not_work') {
-      updatePage(d.pageId, { status: 'not_work', pile: null, reason: d.why })
+      // set aside but still the pile's, so an undo takes it back (Loose pages lists review pages only)
+      updatePage(d.pageId, { status: 'not_work', reason: d.why })
     } else {
       updatePage(d.pageId, { pile: null, reason: d.why })
     }
@@ -108,6 +109,7 @@ export function applyDecisions(pile: Pile, result: SettleResult): void {
     sheets: result.sheets,
     twoSided: result.twoSided == null ? null : result.twoSided ? 1 : 0,
     held,
+    mode: result.packets ? 'packets' : null,
     settledAt: new Date().toISOString(),
   })
 }
@@ -121,7 +123,7 @@ export function namePile(pileId: number, assignment: string): Pile {
   if (pileArriving(pileId)) throw new Error(`this pile is still arriving, ${pilePages(pileId).length} of ${pile.pages} pages in`)
   const code = assignment.trim().toUpperCase()
   if (!getAssignment(code)) throw new Error(`no assignment ${code}`)
-  if (pilePages(pileId).some((p) => p.status !== 'review')) throw new Error('this pile has filed pages; undo it before naming it again')
+  if (pilePages(pileId).some((p) => p.status !== 'review')) throw new Error('this pile has pages filed or set aside; undo it before naming it again')
   return settle(pileId, code)
 }
 
@@ -147,6 +149,12 @@ export function undoPile(pileId: number): Pile {
       console.warn(`undo of pile ${pileId}: could not restore replaced scan ${old.id} (replaced by page ${p.id}): ${(err as Error).message}`)
     }
   }
+  // Pages the settle sent loose (another assignment's code, a jumbled pile, a code that could not be filed) come back too;
+  // pages the teacher sent loose from the check, or sent back from a packet, stay where the teacher put them.
+  for (const p of settledLoose(pile)) {
+    updatePage(p.id, { pile: pileId })
+    putBack(p)
+  }
   for (const p of pilePages(pileId)) {
     if (p.status === 'review') {
       updatePage(p.id, { reason: 'in pile' })
@@ -156,11 +164,18 @@ export function undoPile(pileId: number): Pile {
     if (p.status === 'filed' || p.status === 'not_work') putBack(p)
   }
   for (const [student, assignment] of emptied.values()) emptyOrDeletePacket(student, assignment)
-  updatePile(pile.id, { status: 'new', assignment: null, sheets: null, twoSided: null, held: [], settledAt: null })
+  updatePile(pile.id, { status: 'new', assignment: null, sheets: null, twoSided: null, held: [], mode: null, settledAt: null })
   const out = getPile(pileId)!
   broadcast('pile', out)
   return out
 }
+
+/** The loose pages this pile's settle set aside: from its PDF, once in it (they keep their place), and not sent loose by the teacher. */
+function settledLoose(pile: Pile): Page[] {
+  const byTeacher = (reason: string | null) => reason === LEFT_LOOSE || (reason ?? '').startsWith('Sent back from')
+  return pagesOfPileOrOrigin(pile.id, pile.origin).filter((p) => p.pile == null && p.status === 'review' && p.pileIndex != null && !byTeacher(p.reason))
+}
+const LEFT_LOOSE = 'left loose'
 
 /** One taken page back in the pile as it arrived: file in holding, unsettled, with the code its text read. */
 function putBack(p: Page) {
@@ -191,7 +206,7 @@ export function looseSheet(pileId: number, sheet: number): Page[] {
   const out: Page[] = []
   for (const id of h.pages) {
     if (id == null || getPage(id)?.status !== 'review') continue
-    updatePage(id, { pile: null, reason: 'left loose' })
+    updatePage(id, { pile: null, reason: LEFT_LOOSE })
     out.push(getPage(id)!)
   }
   release(pile, sheet)
@@ -236,7 +251,7 @@ function fileHeld(pileId: number, sheet: number, student: string, page: number):
     // which side a page is comes from where it sits in the pile: past the middle of a two-sided pile, a back
     const side: Side = pile.twoSided && (p.pileIndex ?? 0) > pile.pages / 2 ? 'b' : 'a'
     if (!printed.has(`${page}${side}`)) {
-      updatePage(id, { status: 'not_work', pile: null, reason: `sheet ${page} has no printed ${side === 'b' ? 'back' : 'front'}` })
+      updatePage(id, { status: 'not_work', reason: `sheet ${page} has no printed ${side === 'b' ? 'back' : 'front'}` })
       continue
     }
     out.push(fileFromReview(id, { student, assignment: a.code, page, side }, true))

@@ -30,7 +30,7 @@ export interface SettleResult {
   sheets: number | null
   twoSided: boolean | null
   decisions: Decision[]
-  packets?: Array<{ sheets: number[]; student: string | null }> // only in the no-codes case (§1.6)
+  packets?: Array<{ sheets: number[]; student: string | null }> // only when no page read a code for the assignment (§1.6)
 }
 
 type PileRow = PileInput['pages'][number]
@@ -76,12 +76,16 @@ export function settlePile(input: PileInput): SettleResult {
   const name = (student: string) => input.roster.find((r) => r.code === student)?.name ?? student
   const decisions: Decision[] = []
 
-  // Pages whose code names another assignment are set aside and count as unread here.
+  // Pages whose code names another assignment, or a sheet this one does not have, are set aside and count as unread here.
   const loose = new Set<number>()
   for (const p of input.pages) {
-    if (p.ref && p.ref.assignment !== own) {
+    const why = !p.ref ? null
+      : p.ref.assignment !== own ? `its code is for ${p.ref.assignment}, not ${own}`
+      : p.ref.page > a.sheets ? `its code says sheet ${p.ref.page}, but ${own} has ${a.sheets}`
+      : null
+    if (why) {
       loose.add(p.id)
-      decisions.push({ kind: 'loose', pageId: p.id, why: `its code is for ${p.ref.assignment}, not ${own}` })
+      decisions.push({ kind: 'loose', pageId: p.id, why })
     }
   }
   const refOf = (p: PileRow | undefined) => (p && !loose.has(p.id) ? p.ref : null)
@@ -114,9 +118,9 @@ export function settlePile(input: PileInput): SettleResult {
 
   holdDuplicates(live, twoSided, name)
 
-  const knownCount = live.filter((s) => s.kind === 'known').length
-  if (knownCount < 2) {
-    // Too few codes to find runs: packets by sheet count, the next students in name order (§1.6).
+  if (live.every((s) => s.kind === 'unknown')) {
+    // No code for this assignment on any page: packets by sheet count, the next students in name order (§1.6).
+    // One code is enough to go by: placeUnknowns places from a single run, and holds what it cannot.
     const waiting = input.roster.filter((r) => !input.turnedIn.has(r.code)).map((r) => r.code)
     const packets: NonNullable<SettleResult['packets']> = []
     // only sheets with a page left in the pile: a sheet set aside as loose is in no packet
@@ -288,9 +292,8 @@ function placeUnknowns(sheets: Sheet[], sheetCount: number, filed: Map<string, S
         if (page >= 1)
           out.push({ student: next.student, page, fits: fit !== undefined, why: back === 0 ? `scanned right before ${at(next)}` : `scanned ${back + 1} sheets before ${at(next)}` })
       }
-      // a student who lacks the number first, then numbers the assignment has, then an extra page past its last sheet
-      const rank = (g: Guess & { fits: boolean }) => (g.fits ? 0 : g.page <= sheetCount ? 1 : 2)
-      return out.sort((x, y) => rank(x) - rank(y)).map(({ fits: _, ...g }) => g)
+      // a student who lacks the number first, then one who has it (filing it replaces theirs); never a sheet the assignment does not have
+      return out.filter((g) => g.page <= sheetCount).sort((x, y) => Number(y.fits) - Number(x.fits)).map(({ fits: _, ...g }) => g)
     }
     const hold = (why: string) => {
       group.forEach((s, j) => {
