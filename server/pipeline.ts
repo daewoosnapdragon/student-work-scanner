@@ -415,8 +415,9 @@ export function unfilePage(pageId: number): Page {
   return updated
 }
 
+// Loose pages only: a pile's pages (held, or still arriving) are decided on the pile's own screen.
 export function skipAllInReview(notWork = false): number {
-  const pages = reviewPages()
+  const pages = reviewPages().filter((p) => p.pile == null)
   for (const p of pages) updatePage(p.id, { status: notWork ? 'not_work' : 'skipped' })
   if (pages.length) broadcast('review', { skippedAll: pages.length })
   return pages.length

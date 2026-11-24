@@ -295,6 +295,10 @@ export function insertPage(p: Omit<Page, 'id'>): Page {
 export function pilePages(pileId: number): Page[] {
   return getDb().prepare('SELECT * FROM pages WHERE pile = ? ORDER BY pileIndex').all(pileId) as unknown as Page[]
 }
+/** Every page a pile's PDF gave: those still in the pile, and those gone loose or set aside from it (which keep their origin). */
+export function pagesOfPileOrOrigin(pileId: number, origin: string): Page[] {
+  return getDb().prepare('SELECT * FROM pages WHERE pile = ? OR origin = ? ORDER BY seq').all(pileId, origin) as unknown as Page[]
+}
 export function updatePage(id: number, patch: Partial<Page>) {
   const keys = Object.keys(patch) as Array<keyof Page>
   if (!keys.length) return

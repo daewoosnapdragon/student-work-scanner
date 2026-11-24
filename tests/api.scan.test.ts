@@ -195,9 +195,14 @@ describe('scan and pile routes', () => {
     const row = (await get('/api/assignments')).body.find((a: any) => a.code === 'W14')
     expect(row.missingSide).toBe(1)
     expect(row.notIn).toEqual(['Cho'])
+    // a packet with no side filed is not in, not short a side: it stays open
+    db.refreshPacket('S03', 'W14', new Date().toISOString())
+    expect((await get('/api/assignments')).body.find((a: any) => a.code === 'W14').missingSide).toBe(1)
     const r = await post('/api/analyse/assignment/W14', { closeIncomplete: true })
     expect(r.status).toBe(400)
     expect(db.getPacket('S04', 'W14')).toMatchObject({ complete: 1, closedIncomplete: 1 })
+    expect(db.getPacket('S03', 'W14')).toMatchObject({ sides: 0, complete: 0, closedIncomplete: 0 })
+    db.deletePacket('S03', 'W14')
   })
 
   it('marks feedback printed when the whole class is printed', async () => {
@@ -212,5 +217,23 @@ describe('scan and pile routes', () => {
     expect((await fetch(`${base}/print/feedback/W14`)).status).toBe(200)
     expect(db.packetsForAssignment('W14').every((p) => p.feedbackPrintedAt)).toBe(true)
     expect((await get('/api/assignments')).body.find((a: any) => a.code === 'W14').stage).toBe('done')
+  })
+  it('skips only loose pages when everything in the queue is skipped', async () => {
+    db.upsertAssignment({ code: 'W40', title: 'Week 40', klass: 'Daisy', grade: 3, assignedOn: null, sheets: 2, twoSided: 1, tags: '', notes: null })
+    const codes = CLEAN.map((c) => c.replace(':W14:', ':W40:'))
+    codes[5] = 'SWS1:S03:W40:1B'
+    await processAll(await pilePdf('skip.pdf', codes))
+    const pile = db.listPiles()[0]
+    expect(pile).toMatchObject({ assignment: 'W40', status: 'checking' })
+    expect(pile.held).toHaveLength(1)
+    const inPile = db.reviewPages().filter((p) => p.pile != null)
+    expect(inPile.length).toBeGreaterThan(2) // the held sheet's pages and the undone W30 pile's
+    const loose = db.reviewPages().filter((p) => p.pile == null)
+    expect(loose.length).toBeGreaterThan(0)
+    const r = await post('/api/review/skip-all')
+    expect(r.body.skipped).toBe(loose.length)
+    for (const p of loose) expect(db.getPage(p.id)!.status).toBe('skipped')
+    for (const p of inPile) expect(db.getPage(p.id)).toMatchObject({ status: 'review', pile: p.pile, reason: p.reason })
+    expect(db.getPile(pile.id)!.held).toEqual(pile.held)
   })
 })
