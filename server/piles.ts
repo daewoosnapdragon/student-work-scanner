@@ -20,10 +20,11 @@ export interface PileInput {
 export type Decision =
   | { kind: 'file'; pageId: number; ref: PageRef; filedFrom: 'code' | 'pile' }
   | { kind: 'not_work'; pageId: number; why: string }
+  // pageIds: the sheet's pages not set aside as loose, front first; [0] is the back only when the front went loose
   | { kind: 'hold'; sheet: number; pageIds: [number, number | null]; why: string; guesses: Array<{ student: string; page: number; why: string }> }
   | { kind: 'loose'; pageId: number; why: string }
 export interface SettleResult {
-  assignment: string | null // most common among read codes; null when none read
+  assignment: string | null // the named assignment when the caller gives one, else the most common among read codes; null when neither
   status: PileStatus // 'done' | 'checking' | 'jumbled' | 'new' (no assignment)
   sheets: number | null
   twoSided: boolean | null
@@ -67,7 +68,8 @@ export function settlePile(input: PileInput): SettleResult {
   const a = input.assignment
   if (!a) return { assignment: code, status: 'new', sheets: null, twoSided: null, decisions: [] }
 
-  const own = code ?? a.code
+  // The assignment the caller named wins; the codes only suggest one before it is named.
+  const own = a.code
   const byIndex = new Map(input.pages.map((p) => [p.index, p]))
   const twoSided = input.sides.some((s) => s.side === 'b')
   const name = (student: string) => input.roster.find((r) => r.code === student)?.name ?? student
@@ -83,7 +85,7 @@ export function settlePile(input: PileInput): SettleResult {
   }
   const refOf = (p: PileRow | undefined) => (p && !loose.has(p.id) ? p.ref : null)
 
-  if (twoSided && input.pages.length % 2 === 1) return jumbled(input, code, decisions, loose)
+  if (twoSided && input.pages.length % 2 === 1) return jumbled(input, own, decisions, loose)
 
   const pairs = pairSheets(input.pages.length, twoSided)
   const sheets: Sheet[] = pairs.map(([fi, bi], i) => {
@@ -96,7 +98,7 @@ export function settlePile(input: PileInput): SettleResult {
   let row = 0
   for (const s of sheets) {
     row = s.kind === 'held' ? row + 1 : 0
-    if (row >= 3) return jumbled(input, code, decisions, loose)
+    if (row >= 3) return jumbled(input, own, decisions, loose)
   }
 
   // A sheet whose only pages were set aside takes no place in the order.
@@ -111,10 +113,12 @@ export function settlePile(input: PileInput): SettleResult {
     // Too few codes to find runs: packets by sheet count, the next students in name order (§1.6).
     const waiting = input.roster.filter((r) => !input.turnedIn.has(r.code)).map((r) => r.code)
     const packets: NonNullable<SettleResult['packets']> = []
-    for (let i = 0, k = 0; i < sheets.length; i += Math.max(1, a.sheets), k++) {
-      packets.push({ sheets: sheets.slice(i, i + Math.max(1, a.sheets)).map((s) => s.n), student: waiting[k] ?? null })
+    // only sheets with a page left in the pile: a sheet set aside as loose is in no packet
+    const per = Math.max(1, a.sheets)
+    for (let i = 0, k = 0; i < live.length; i += per, k++) {
+      packets.push({ sheets: live.slice(i, i + per).map((s) => s.n), student: waiting[k] ?? null })
     }
-    return { assignment: code, status: 'checking', sheets: sheets.length, twoSided, decisions, packets }
+    return { assignment: own, status: 'checking', sheets: sheets.length, twoSided, decisions, packets }
   }
 
   placeUnknowns(live, a.sheets, input.filed, twoSided, name)
@@ -142,7 +146,7 @@ export function settlePile(input: PileInput): SettleResult {
     }
   }
   const status: PileStatus = decisions.some((d) => d.kind === 'hold') ? 'checking' : 'done'
-  return { assignment: code, status, sheets: sheets.length, twoSided, decisions }
+  return { assignment: own, status, sheets: sheets.length, twoSided, decisions }
 }
 
 function readSheet(
@@ -264,6 +268,7 @@ function placeUnknowns(sheets: Sheet[], sheetCount: number, filed: Map<string, S
       })
     }
     // The guesses for the j-th codeless sheet of the group: the neighbours, the one that can still take it first.
+    // The student after takes the numbers nearest them, so the sheet right before `next` lines up with the last of fromNext.
     const guesses = (j: number): Guess[] => {
       const out: Array<Guess & { fits: boolean }> = []
       if (prev) {
@@ -272,11 +277,14 @@ function placeUnknowns(sheets: Sheet[], sheetCount: number, filed: Map<string, S
       }
       if (next && !(prev && prev.student === next.student)) {
         const back = k - 1 - j
-        const page = fromNext[j] ?? next.page - 1 - back
+        const fit = fromNext[fromNext.length - 1 - back] as number | undefined
+        const page = fit ?? next.page - 1 - back
         if (page >= 1)
-          out.push({ student: next.student, page, fits: fromNext[j] !== undefined, why: back === 0 ? `scanned right before ${at(next)}` : `scanned ${back + 1} sheets before ${at(next)}` })
+          out.push({ student: next.student, page, fits: fit !== undefined, why: back === 0 ? `scanned right before ${at(next)}` : `scanned ${back + 1} sheets before ${at(next)}` })
       }
-      return out.sort((x, y) => Number(y.fits) - Number(x.fits)).map(({ fits: _, ...g }) => g)
+      // a student who lacks the number first, then numbers the assignment has, then an extra page past its last sheet
+      const rank = (g: Guess & { fits: boolean }) => (g.fits ? 0 : g.page <= sheetCount ? 1 : 2)
+      return out.sort((x, y) => rank(x) - rank(y)).map(({ fits: _, ...g }) => g)
     }
     const hold = (why: string) => {
       group.forEach((s, j) => {
@@ -298,7 +306,8 @@ function placeUnknowns(sheets: Sheet[], sheetCount: number, filed: Map<string, S
       else if (fromNext.length >= k && fromPrev.length === 0) place(next.student, fromNext)
       else if (fromPrev.length === 0 && fromNext.length === 0)
         hold(`${blank}${several}, between ${at(prev)} and ${at(next)}, and neither is missing a sheet that fits here (${name(prev.student)} already has every sheet after it)`)
-      else hold(`${blank}${several}, between ${at(prev)} and ${at(next)}, and it could belong to either`)
+      else if (k === 1) hold(`${blank}, between ${at(prev)} and ${at(next)}, and it could belong to either`)
+      else hold(`${blank}${several}, between ${at(prev)} and ${at(next)}, and which of them belong to whom is not certain`)
     } else {
       // At the start or end of the pile, beside one run only.
       const s = (prev ?? next)!
@@ -319,7 +328,7 @@ function placeUnknowns(sheets: Sheet[], sheetCount: number, filed: Map<string, S
  * with its mirror here (a pile fed unflipped disagrees with every mirror), so a code is refused
  * only when another page of the pile reads exactly the same.
  */
-function jumbled(input: PileInput, code: string | null, decisions: Decision[], loose: Set<number>): SettleResult {
+function jumbled(input: PileInput, own: string, decisions: Decision[], loose: Set<number>): SettleResult {
   const key = (r: PageRef) => `${r.student}:${r.page}${r.side}`
   const count = new Map<string, number>()
   for (const p of input.pages) if (p.ref && !loose.has(p.id)) count.set(key(p.ref), (count.get(key(p.ref)) ?? 0) + 1)
@@ -329,5 +338,5 @@ function jumbled(input: PileInput, code: string | null, decisions: Decision[], l
     else if (count.get(key(p.ref))! > 1) decisions.push({ kind: 'loose', pageId: p.id, why: 'another page in this pile reads with the same code' })
     else decisions.push({ kind: 'file', pageId: p.id, ref: p.ref, filedFrom: 'code' })
   }
-  return { assignment: code, status: 'jumbled', sheets: null, twoSided: input.sides.some((s) => s.side === 'b'), decisions }
+  return { assignment: own, status: 'jumbled', sheets: null, twoSided: input.sides.some((s) => s.side === 'b'), decisions }
 }
