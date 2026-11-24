@@ -10,9 +10,9 @@ import {
 } from '../db.js'
 import { broadcast, subscribe } from '../events.js'
 import { guessesFor } from '../guesses.js'
-import { abs, fileFromReview, reorderPacket, skipAllInReview, skipFromReview, unfilePage } from '../pipeline.js'
-import { openPilesFor, piles as pileRoutes, pileSheets, rosterFor } from './piles.js'
-import { pileAssignment } from '../piles.js'
+import { abs, fileFromReview, pileArriving, reorderPacket, skipAllInReview, skipFromReview, unfilePage } from '../pipeline.js'
+import { codeAssignmentOf, openPilesFor, piles as pileRoutes, pileSheets, rosterFor } from './piles.js'
+import { settle } from '../pileFiling.js'
 import { buildPdf } from '../pdf.js'
 import { classPrompt, splitClassAnswer, splitStudentSection } from '../analysis.js'
 import { enqueueAssignment, enqueueClass, enqueuePacket, getSettings, queueStatus, saveSettings, testKey, domainList, domainsFor, LEVELS, anchorsFor } from '../claude.js'
@@ -45,11 +45,17 @@ api.get('/scan', (_req, res) => {
   const piles = listPiles().map((pile) => {
     const sheets = pileSheets(pile)
     const rows = pagesOfPileOrOrigin(pile.id, pile.origin)
+    const codeAssignment = codeAssignmentOf(pile)
+    const arriving = pile.status === 'new' && pileArriving(pile.id)
     return {
       ...pile,
       assignmentTitle: pile.assignment ? (getAssignment(pile.assignment)?.title ?? null) : null,
       // the assignment the codes that read name, even before it exists: what "New assignment from these codes" offers
-      codeAssignment: pileAssignment(rows.filter((p) => p.pile === pile.id).map((p) => ({ id: p.id, index: p.pileIndex ?? 0, ref: p.student && p.assignment && p.page && p.side ? { student: p.student, assignment: p.assignment, page: p.page, side: p.side } : null }))),
+      codeAssignment,
+      codeSetUp: !!codeAssignment && !!getAssignment(codeAssignment),
+      // a pile whose pages are still coming in: nothing can be named or settled yet
+      arriving,
+      pagesIn: rows.filter((p) => p.pile === pile.id).length,
       filed: sheets.filter((x) => x.status === 'filed').length,
       toCheck: pile.held.length,
       // pages, not sheets: a jumbled pile sends pages loose one by one
@@ -199,6 +205,17 @@ api.post('/assignments', (req, res) => {
   refreshPacketsFor(code)
   // a rubric seed from Worksheet Studio (the worksheet's objective and skill) fills a rubric the teacher has not written yet
   if (b.rubric && typeof b.rubric === 'object' && !before?.rubric) setAssignmentRubric(code, JSON.stringify(cleanRubric(b.rubric)))
+  // a pile waiting with codes for this assignment is settled the moment it is created (an edit leaves an undone pile alone)
+  if (!before) {
+    for (const pile of listPiles(500)) {
+      if (pile.status !== 'new' || pileArriving(pile.id) || codeAssignmentOf(pile) !== code) continue
+      try {
+        settle(pile.id)
+      } catch (err) {
+        console.warn(`settling pile ${pile.id} for new assignment ${code}: ${(err as Error).message}`)
+      }
+    }
+  }
   res.json(getAssignment(code))
 })
 

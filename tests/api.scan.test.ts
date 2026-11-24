@@ -245,3 +245,67 @@ describe('scan and pile routes', () => {
     expect(db.getPile(pile.id)!.held).toEqual(pile.held)
   })
 })
+
+describe('scan and pile routes: final review fixes', () => {
+  const w = (code: string, sheets: number, twoSided: number, klass = 'Daisy') =>
+    db.upsertAssignment({ code, title: code, klass, grade: klass === 'Daisy' ? 3 : 4, assignedOn: null, sheets, twoSided, tags: '', notes: null })
+  const scanRow = async (id: number) => (await get('/api/scan')).body.piles.find((p: any) => p.id === id)
+
+  it('offers packets only for a pile that read no code, and says so on the pile', async () => {
+    w('W50', 2, 1)
+    await processAll(await pilePdf('single50.pdf', ['SWS1:S03:W50:1A', 'SWS1:S03:W50:1B']))
+    const one = (await get(`/api/piles/${db.listPiles()[0].id}`)).body
+    expect(one.pile).toMatchObject({ status: 'done', mode: null })
+    expect(one.packets).toBeUndefined()
+    expect(db.getPacket('S03', 'W50')).toMatchObject({ sides: 2 })
+
+    await processAll(await pilePdf('blank50.pdf', [null, null]))
+    const named = await post(`/api/piles/${db.listPiles()[0].id}/assignment`, { code: 'W50' })
+    expect(named.body.pile).toMatchObject({ status: 'checking', mode: 'packets' })
+    expect(named.body.packets).toHaveLength(1)
+  })
+
+  it('settles again only a pile that is waiting to be named', async () => {
+    const done = db.listPiles().find((p) => p.status === 'done')!
+    const r = await post(`/api/piles/${done.id}/settle`)
+    expect(r.status).toBe(400)
+    expect(r.body.error).toMatch(/settled/)
+  })
+
+  it('marks a guess for a sheet the student already has', async () => {
+    w('W51', 2, 0)
+    await processAll(await pilePdf('already51.pdf', ['SWS1:S01:W51:1A', null, 'SWS1:S01:W51:2A']))
+    const body = (await get(`/api/piles/${db.listPiles()[0].id}`)).body
+    expect(body.held).toHaveLength(1)
+    expect(body.held[0].guesses).toEqual([expect.objectContaining({ student: 'S01', page: 2, already: true })])
+  })
+
+  it('says what the codes of a waiting pile name, and whether that assignment is set up', async () => {
+    await processAll(await pilePdf('w31.pdf', ['SWS1:S11:W31:1A']))
+    const id = db.listPiles()[0].id
+    expect(await scanRow(id)).toMatchObject({ status: 'new', codeAssignment: 'W31', codeSetUp: false, arriving: false, pagesIn: 1 })
+    // the W30 pile undone earlier names an assignment that exists
+    const w30 = (await get('/api/scan')).body.piles.find((p: any) => p.codeAssignment === 'W30')
+    expect(w30).toMatchObject({ status: 'new', codeSetUp: true })
+  })
+
+  it('settles a waiting pile when the assignment its codes name is created', async () => {
+    const id = db.listPiles()[0].id
+    const r = await post('/api/assignments', { code: 'W31', title: 'Rivers 2', klass: 'Rose', sheets: 1 })
+    expect(r.status).toBe(200)
+    expect(db.getPile(id)).toMatchObject({ status: 'done', assignment: 'W31' })
+    expect(db.getPacket('S11', 'W31')).toMatchObject({ sides: 1 })
+    // an edit of an assignment that already existed leaves an undone pile alone
+    expect((await post('/api/assignments', { code: 'W30', title: 'Rivers', klass: 'Rose', sheets: 2 })).status).toBe(200)
+    expect((await get('/api/scan')).body.piles.find((p: any) => p.codeAssignment === 'W30')).toMatchObject({ status: 'new' })
+  })
+
+  it('says a pile is still arriving, and how many of its pages are in', async () => {
+    const rendered = await pipeline.processInboxFile(await pilePdf('arr.pdf', ['SWS1:S01:W14:1A', 'SWS1:S01:W14:2A', 'SWS1:S01:W14:2B', 'SWS1:S01:W14:1B']))
+    await pipeline.processInboxFile(rendered[0])
+    const id = db.listPiles()[0].id
+    expect(await scanRow(id)).toMatchObject({ status: 'new', arriving: true, pagesIn: 1, pages: 4 })
+    for (const f of rendered.slice(1)) await pipeline.processInboxFile(f)
+    expect(await scanRow(id)).toMatchObject({ arriving: false })
+  })
+})

@@ -67,17 +67,17 @@ Nothing from a PDF is filed until its last page has been read. Then the pile is 
 - **What files itself**: a sheet where both sides read and agree, or one side read and the other was missed (the missed side takes the same student and sheet). A sheet with no code on either side between two sheets of the same student takes the sheet number that student is missing (an unknown sheet between Olivia 1 and Olivia 3 is Olivia 2), and so does one between two students when only one of them can still take it.
 - **What is held**: a sheet whose two codes contradict each other (a wrong code), a code on the wrong side of the paper, two sheets reading as the same student's same sheet, and a sheet with no code that could belong to either neighbour or to neither. Held sheets wait for the check screen with a best guess each. When in doubt the program holds: a held sheet costs one key press, a wrong placement files one child's work under another child.
 - **Jumbled**: when the page count of a two-sided pile is odd, or three or more sheets in a row disagree with their mirror (a jam, a double feed, two piles in one PDF), nothing is filed by position. Every page with a clean code files on its own and the rest go to loose pages, and the Scan screen says so plainly.
-- A pile with no codes at all is cut into packets of the assignment's sheet count, each given the next student in name order who has not turned the work in, for you to check the names.
+- A pile with no code for its assignment on any page is cut into packets of the assignment's sheet count, each given the next student in name order who has not turned the work in, for you to check the names.
 
-**Undo this pile** (Scan) takes back everything the pile filed, by code, by position and by hand: the pages return to the pile, a scan it replaced comes back, and the pile can be settled again, usually under another assignment. Pages you sent loose stay loose.
+**Undo this pile** (on the Scan screen, or **Wrong assignment? Undo this pile** on its check screen) takes back everything the pile filed, by code, by position and by hand: the pages return to the pile, a scan it replaced comes back, and the pile can be settled again, usually under another assignment. Pages the pile itself set aside (another assignment's code, a jumbled pile's leftovers, a blank back) come back with it; pages you sent loose stay loose.
 
-A caveat: a pile where the backs were shifted by one (a double feed) and most of the back codes were missed can stay below the "jumbled" threshold, so a few backs may be placed with the wrong front. The check screen shows what each sheet was placed as, and Undo re-settles the pile.
+A caveat: a pile where the backs were shifted by one (a double feed) and most of the back codes were missed can stay below the "jumbled" threshold, so a few backs may be placed with the wrong front. The check screen lists what each sheet was filed as, by student, and Undo re-settles the pile.
 
 There is no waiting period any more. A packet still short a side simply shows as such on the Assignments hub ("16 of 18 in · 2 missing a side") and on its page, and the hub's next step moves the assignment on regardless.
 
 ### Scan
 
-The Scan screen (the first screen) shows the folder being watched by its name (the full path on hover), when the last page came, and the piles, newest first, each with one action: **Check N** when sheets are held, **Settle it** when it needs its assignment, **Open** and **Undo** once it is done. Under them, the count of **loose pages** with **Sort them**. Its menu badge counts piles to check plus loose pages. Everything that arrived, page by page, is at the bottom (`/scan/log`).
+The Scan screen (the first screen) shows the folder being watched by its name (the full path on hover), when the last page came, and the piles, newest first, each with one action: **Check N** (and **Undo**) when sheets are held, **Settle it** when it needs its assignment, **Open** and **Undo** once it is done. A pile still coming in says how many of its pages are in. Under them, the count of **loose pages** with **Sort them**. Its menu badge counts piles to check plus loose pages. Everything that arrived, page by page, is at the bottom (`/scan/log`).
 
 ### Check a pile
 

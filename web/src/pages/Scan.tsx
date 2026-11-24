@@ -1,10 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { post, useFetch, fmtTime, type Assignment, type Pile } from '../api'
-import { folderName, pileAction, pileLine } from './scanCopy'
+import { canUndo, folderName, pileAction, pileLine } from './scanCopy'
 
-/** A pile on the Scan screen. codeAssignment: the assignment its codes name, even one that does not exist yet. looseFrom: pages it sent to loose pages. */
-interface PileRow extends Pile { assignmentTitle: string | null; codeAssignment: string | null; filed: number; toCheck: number; looseFrom: number }
+/**
+ * A pile on the Scan screen. codeAssignment: the assignment its codes name, even one that does not exist yet (codeSetUp: it does).
+ * looseFrom: pages it sent to loose pages. arriving: pages still coming in, pagesIn of them so far.
+ */
+interface PileRow extends Pile { assignmentTitle: string | null; codeAssignment: string | null; codeSetUp: boolean; arriving: boolean; pagesIn: number; filed: number; toCheck: number; looseFrom: number }
 interface ScanData {
   status: { inbox: string; originals?: string; folder?: string; queued: number; busy: boolean; lastSeen: string | null }
   piles: PileRow[]
@@ -62,7 +65,10 @@ export default function Scan() {
 
 function PileCard({ p, assignments, primary }: { p: PileRow; assignments: Assignment[]; primary: boolean }) {
   const action = pileAction(p)
-  const [code, setCode] = useState(p.assignment ?? '')
+  // the choice starts on the assignment the codes name, when it is set up (a pile undone to be renamed, say)
+  const suggested = p.assignment ?? (p.codeSetUp ? p.codeAssignment : null) ?? ''
+  const [code, setCode] = useState(suggested)
+  useEffect(() => { if (suggested) setCode((c) => c || suggested) }, [suggested])
   const [making, setMaking] = useState(false)
   const [title, setTitle] = useState('')
   const [klass, setKlass] = useState('')
@@ -86,6 +92,7 @@ function PileCard({ p, assignments, primary }: { p: PileRow; assignments: Assign
           <span className="muted small"> · {hhmm(p.createdAt)}{p.assignment && ` · ${p.assignment}${p.assignmentTitle ? ` ${p.assignmentTitle}` : ''}`}</span>
         </div>
         <div className="row" style={{ gap: 8 }}>
+          {canUndo(p) && <button className="btn" disabled={busy} onClick={undo}>Undo</button>}
           {action === 'check' && <Link to={`/scan/pile/${p.id}`} className={`btn${primary ? ' primary' : ''}`}>Check {p.toCheck}</Link>}
           {action === 'settle' && !making && (
             <>
@@ -97,12 +104,7 @@ function PileCard({ p, assignments, primary }: { p: PileRow; assignments: Assign
               <button className={`btn${primary ? ' primary' : ''}`} disabled={!code || busy} onClick={settle}>Settle it</button>
             </>
           )}
-          {action === 'undo' && (
-            <>
-              {p.status === 'done' && p.assignment && <Link to={`/assignments/${p.assignment}`} className="btn">Open</Link>}
-              <button className="btn" disabled={busy} onClick={undo}>Undo</button>
-            </>
-          )}
+          {action === 'undo' && p.status === 'done' && p.assignment && <Link to={`/assignments/${p.assignment}`} className="btn">Open</Link>}
         </div>
       </div>
       <div className={p.status === 'jumbled' ? '' : 'muted'}>{pileLine(p)}</div>
@@ -116,7 +118,7 @@ function PileCard({ p, assignments, primary }: { p: PileRow; assignments: Assign
             <label className="vh" htmlFor={`nk-${p.id}`}>Class, if no page names one</label>
             <input id={`nk-${p.id}`} type="text" value={klass} onChange={(e) => setKlass(e.target.value)} placeholder="Class (optional)" style={{ width: 130 }} />
             <button className={`btn${primary ? ' primary' : ''}`} disabled={!code.trim() || !title.trim() || busy}>Create and settle</button>
-            <button type="button" className="btn" onClick={() => { setCode(p.assignment ?? ''); setMaking(false) }}>Cancel</button>
+            <button type="button" className="btn" onClick={() => { setCode(suggested); setMaking(false) }}>Cancel</button>
           </form>
         ) : (
           <div className="small"><a href="#new" onClick={(e) => { e.preventDefault(); setCode(p.codeAssignment ?? ''); setMaking(true) }}>New assignment from these codes</a></div>

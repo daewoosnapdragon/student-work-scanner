@@ -2,10 +2,10 @@
 // See the design doc, §1 Piles and §4 Checking a pile.
 
 import { Router, type Response } from 'express'
-import { getAssignment, getPage, getPile, getStudent, listPiles, listStudents, pagesOfPileOrOrigin, pilePages, deleteAssignment } from '../db.js'
+import { getAssignment, getPage, getPile, getStudent, listPiles, listStudents, packetPages, pagesOfPileOrOrigin, pilePages, deleteAssignment } from '../db.js'
 import { assignmentFromCodes, pileArriving } from '../pipeline.js'
 import { fileAllPackets, fileSheet, looseSheet, namePile, settle, undoPile } from '../pileFiling.js'
-import { pairSheets } from '../piles.js'
+import { pairSheets, pileAssignment } from '../piles.js'
 import type { Assignment, HeldSheet, Page, Pile, PileData, SheetRow, SheetStatus, Student } from '../../shared/types.js'
 
 export const piles = Router()
@@ -15,6 +15,11 @@ export function openPilesFor(code: string, from: Pile[] = listPiles(500)): Pile[
   return from.filter((p) => p.assignment === code && (p.status === 'new' || p.status === 'checking'))
 }
 
+
+/** The assignment the codes still in a pile name, even one never set up: what a waiting pile's card says and offers. */
+export function codeAssignmentOf(pile: Pile): string | null {
+  return pileAssignment(pilePages(pile.id).map((p) => ({ id: p.id, index: p.pileIndex ?? 0, ref: p.student && p.assignment && p.page && p.side ? { student: p.student, assignment: p.assignment, page: p.page, side: p.side } : null })))
+}
 
 /**
  * Every sheet of a pile as the PDF's page count pairs them, with the pages at its two places and where
@@ -59,30 +64,37 @@ function pileDetail(pile: Pile): PileData {
   const a = pile.assignment ? (getAssignment(pile.assignment) ?? null) : null
   const sheets = pileSheets(pile)
   const page = (id: number | null) => (id == null ? null : (getPage(id) ?? null))
-  const held = pile.held.map((h) => ({ ...h, thumbs: h.pages.map((id) => page(id)?.thumbPath ?? null) as [string | null, string | null] }))
-  const live = sheets.filter((x) => x.status !== 'missing').length
-  const noCodes = pile.held.length > 0 && pile.held.length === live && pile.held.every((h) => h.guesses.length === 1)
+  // a guess for a sheet the student already has: filing it replaces theirs, so the screen says so
+  const has = (student: string, n: number) => !!a && packetPages(student, a.code).some((p) => p.page === n)
+  const held = pile.held.map((h) => ({
+    ...h,
+    guesses: h.guesses.map((g) => ({ ...g, already: has(g.student, g.page) })),
+    thumbs: h.pages.map((id) => page(id)?.thumbPath ?? null) as [string | null, string | null],
+  }))
+  // packets only when the settle found no code for the assignment on any page (§1.6), as it marked the pile
+  const noCodes = pile.mode === 'packets' && pile.held.length > 0
   return {
     pile,
     assignment: a,
     sheets,
     held,
-    ...(noCodes ? { packets: packetsOf(pile.held, sheets) } : {}),
+    ...(noCodes ? { packets: packetsOf(pile.held, sheets, a?.sheets ?? 1) } : {}),
     roster: a ? rosterFor(a) : [],
   }
 }
 
-/** The no-codes case: consecutive held sheets with the same suggested student make one packet. */
-function packetsOf(held: HeldSheet[], sheets: SheetRow[]): Array<{ sheets: number[]; student: string; pages: Page[] }> {
+/** The no-codes case: consecutive held sheets with the same suggested student make one packet ('' when the roster ran out). */
+function packetsOf(held: HeldSheet[], sheets: SheetRow[], per: number): Array<{ sheets: number[]; student: string; pages: Page[] }> {
   const out: Array<{ sheets: number[]; student: string; pages: Page[] }> = []
   let prev: number | null = null
   for (const h of [...held].sort((x, y) => x.sheet - y.sheet)) {
-    const student = h.guesses[0].student
+    const g = h.guesses[0] as HeldSheet['guesses'][number] | undefined
+    const student = g?.student ?? ''
     const last = out[out.length - 1]
     const row = sheets[h.sheet - 1]
     const pages = [row?.front, row?.back].filter((p): p is Page => !!p)
-    // a new packet when the student changes, or the guess starts over at sheet 1
-    if (last && last.student === student && prev === h.sheet - 1 && h.guesses[0].page !== 1) {
+    // a new packet when the student changes, the guess starts over at sheet 1, or (with no guess) the packet is full
+    if (last && last.student === student && prev === h.sheet - 1 && (g ? g.page !== 1 : last.sheets.length < per)) {
       last.sheets.push(h.sheet)
       last.pages.push(...pages)
     } else out.push({ sheets: [h.sheet], student, pages })
@@ -133,6 +145,7 @@ piles.post('/:id/assignment', (req, res) => {
 piles.post('/:id/settle', (req, res) => {
   const pile = withPile(req.params.id, res)
   if (!pile) return
+  if (pile.status !== 'new') return res.status(400).json({ error: 'this pile is settled already; undo it to settle it again' })
   if (pileArriving(pile.id)) return res.status(400).json({ error: `this pile is still arriving, ${pilePages(pile.id).length} of ${pile.pages} pages in` })
   try {
     res.json(pileDetail(settle(pile.id)))

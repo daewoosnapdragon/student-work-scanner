@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cutPackets, nextSheetNumber, packetSize, resolveTyped, typedQuery } from '../web/src/pages/pileCheckLogic'
+import { cutPackets, defaultPick, nextSheetNumber, packetSize, resolveTyped, typedQuery } from '../web/src/pages/pileCheckLogic'
 
 describe('nextSheetNumber', () => {
   it('takes the guess’s sheet when it has one', () => expect(nextSheetNumber([1, 3], 2)).toBe(2))
@@ -70,4 +70,11 @@ describe('packetSize', () => {
     expect(packetSize('', 4)).toBeNull()
     expect(packetSize('x', 4)).toBeNull()
   })
+})
+
+describe('defaultPick', () => {
+  it('picks the first guess that fits', () => expect(defaultPick([{ already: true }, { already: false }])).toBe(2))
+  it('picks the first guess when it fits', () => expect(defaultPick([{}, { already: true }])).toBe(1))
+  it('picks Someone else when no guess fits', () => expect(defaultPick([{ already: true }, { already: true }])).toBe(3))
+  it('picks Someone else when there is no guess', () => expect(defaultPick([])).toBe(1))
 })

@@ -19,7 +19,8 @@ const router = createBrowserRouter([
     path: '/',
     element: <Shell />,
     children: [
-      { index: true, element: <Scan /> },
+      // one route serves the Scan screen, so its tab lights up from the start
+      { index: true, element: <Navigate to="/scan" replace /> },
       { path: 'scan', element: <Scan /> },
       { path: 'scan/log', element: <ScanLog /> },
       { path: 'scan/pile/:id', element: <PileCheck /> },

@@ -8,6 +8,12 @@ export function nextSheetNumber(lacking: number[], guessPage: number | null): nu
   return lacking.length ? Math.min(...lacking) : 1
 }
 
+/** The choice a held sheet starts on, 1-based: the first guess for a sheet the student lacks, else Someone else (after the guesses). */
+export function defaultPick(guesses: Array<{ already?: boolean }>): number {
+  const i = guesses.findIndex((g) => !g.already)
+  return i === -1 ? guesses.length + 1 : i + 1
+}
+
 /**
  * A pile scanned without codes, cut into packets over sheet numbers 1..N: packet k takes `sizes[k]`
  * sheets (the usual `perStudent` when not set), in pile order, so changing one packet's size shifts

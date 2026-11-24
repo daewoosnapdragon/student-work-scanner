@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { get, post, useFetch, fileUrl, type Assignment, type Page, type Student } from '../api'
 import type { PileData } from '../../../shared/types'
 import { useViewer, type ViewerPage } from '../components/Viewer'
-import { cutPackets, nextSheetNumber, packetSize, resolveTyped, typedQuery, type Search } from './pileCheckLogic'
+import { cutPackets, defaultPick, nextSheetNumber, packetSize, resolveTyped, typedQuery, type Search } from './pileCheckLogic'
 
 interface Checked { sheet: number; to: string }
 
@@ -16,6 +16,18 @@ export default function PileCheck() {
   // what went wrong with the last filing, kept here so it outlives the part of the screen that filed
   const [note, setNote] = useState<string | null>(null)
   const done = (c: Checked[], problem: string | null = null) => { setChecked((was) => [...was, ...c]); setNote(problem); setBump((b) => b + 1) }
+  const navigate = useNavigate()
+  const [undoErr, setUndoErr] = useState<string | null>(null)
+  async function undo() {
+    if (!window.confirm('Undo this pile? Everything it filed goes back as it arrived, replaced scans come back, and you can name it again on the Scan screen.')) return
+    setUndoErr(null)
+    try {
+      await post(`/api/piles/${id}/undo`, {})
+      navigate('/scan')
+    } catch (e) {
+      setUndoErr((e as Error).message)
+    }
+  }
 
   if (error) return <main><p className="err">{error}</p></main>
   if (!data) return <main><p className="muted">Loading</p></main>
@@ -30,6 +42,13 @@ export default function PileCheck() {
         <h1 className="serif title" style={{ fontSize: 30 }}>
           {a ? `${a.title} · ${a.code} · ` : ''}{total} sheet{total === 1 ? '' : 's'}, {filed} filed, {held.length} to check
         </h1>
+        {a && pile.status !== 'new' && (
+          <div className="row small" style={{ gap: 8 }}>
+            <span className="muted">Wrong assignment?</span>
+            <button type="button" className="btn" onClick={() => void undo()}>Undo this pile</button>
+          </div>
+        )}
+        {undoErr && <p className="err" style={{ margin: 0 }}>{undoErr}</p>}
       </section>
 
       {!a ? (
@@ -44,6 +63,7 @@ export default function PileCheck() {
             <Link to={`/assignments/${a.code}`} className="btn primary">Open {a.code}</Link>
             <Link to="/scan" className="btn">Back to Scan</Link>
           </div>
+          <FiledSheets sheets={sheets} />
         </section>
       ) : data.packets ? (
         <Packets data={data} assignment={a} onFiled={done} />
@@ -69,6 +89,34 @@ export default function PileCheck() {
 // After a mouse click a button lets go of focus, so Enter goes back to filing; a keyboard press keeps its place.
 const blurIfMouse = (e: MouseEvent<HTMLElement>) => { if (e.detail > 0) e.currentTarget.blur() }
 
+// ---------- what each sheet was placed as, once nothing is left ----------
+
+/** The pile's sheets by student, in pile order, so the teacher can see what each sheet went in as. */
+function FiledSheets({ sheets }: { sheets: PileData['sheets'] }) {
+  const by = new Map<string, { name: string; sheets: string[] }>()
+  const other: string[] = []
+  for (const s of sheets) {
+    const placed = [s.front, s.back].find((p) => p && p.status === 'filed' && p.page != null)
+    if (s.status === 'filed' && s.student) {
+      const row = by.get(s.student) ?? { name: s.studentName ?? s.student, sheets: [] }
+      row.sheets.push(`sheet ${placed?.page ?? '?'} (pile sheet ${s.sheet})`)
+      by.set(s.student, row)
+    } else if (s.status === 'loose') other.push(`sheet ${s.sheet} loose`)
+    else if (s.status === 'not_work') other.push(`sheet ${s.sheet} set aside`)
+    else if (s.status === 'missing') other.push(`sheet ${s.sheet} not scanned`)
+  }
+  if (!by.size && !other.length) return null
+  return (
+    <div className="col sep" style={{ gap: 6 }}>
+      <span className="over quiet">How each sheet was filed</span>
+      {[...by.values()].map((r) => (
+        <div key={r.name} className="small"><b>{r.name}</b> <span className="muted">· {r.sheets.join(', ')}</span></div>
+      ))}
+      {other.length > 0 && <div className="small muted">{other.join(', ')}</div>}
+    </div>
+  )
+}
+
 // ---------- held sheets, one at a time ----------
 
 function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: Assignment; onDone: (c: Checked[], problem?: string | null) => void }) {
@@ -86,7 +134,7 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
   // at most two guesses, so Someone else is always within 1-3
   const guesses = h.guesses.slice(0, 2)
   const otherN = guesses.length + 1
-  const [pick, setPick] = useState(1)
+  const [pick, setPick] = useState(() => defaultPick(guesses))
   const [typed, setTyped] = useState('')
   const [search, setSearch] = useState<Search | null>(null)
   // the sheets a student still lacks and the sheet number chosen, each tied to the student they are for
@@ -99,7 +147,7 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
   const { open: openViewer } = useViewer()
 
   useEffect(() => {
-    setPick(1); setTyped(''); setSearch(null); setLackingFor(null); setSheetPick(null); setRotate(0); setErr(null)
+    setPick(defaultPick(guesses)); setTyped(''); setSearch(null); setLackingFor(null); setSheetPick(null); setRotate(0); setErr(null)
   }, [h.sheet])
 
   // A name, or a bare student code, is looked up on the roster; the answer carries the text it was for.
@@ -240,7 +288,7 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
                 <button key={`${g.student}-${g.page}`} type="button" className={`guess ${pick === i + 1 ? 'on' : ''}`} onClick={(e) => { blurIfMouse(e); setPick(i + 1) }}>
                   <span className="n">{i + 1}</span>
                   <span className="col" style={{ gap: 2 }}>
-                    <span style={{ fontWeight: 600 }}>{g.studentName} · sheet {g.page}</span>
+                    <span style={{ fontWeight: 600 }}>{g.studentName} · sheet {g.page}{g.already && <span className="muted small" style={{ fontWeight: 400 }}> · already in · replaces it</span>}</span>
                     <span className="muted small">{g.why}</span>
                   </span>
                 </button>
