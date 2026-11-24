@@ -199,18 +199,25 @@ export function restoreReplaced(oldPageId: number): Page {
   const m = /page (\d+)$/.exec(old.reason ?? '')
   const by = m ? getPage(Number(m[1])) : undefined
   if (!by) throw new Error('the scan that replaced this one is gone')
+  if (by.status !== 'filed') throw new Error('the scan that replaced this one has itself been replaced or moved')
   const kept = abs(old.filePath)
-  if (!fs.existsSync(kept)) throw new Error('the replaced scan\'s file is gone')
   const live = abs(by.filePath)
+  if (kept === live || !new RegExp(`\\.r${old.id}\\.[^./]+$`).test(kept)) throw new Error('this replaced scan has no kept file to restore')
+  if (!fs.existsSync(kept)) throw new Error('the replaced scan\'s file is gone')
   const archive = path.join(path.dirname(kept), path.basename(kept).replace(/\.r\d+(\.[^.]+)$/, '$1'))
-  if (fs.existsSync(live)) {
-    const aside = path.join(HOLDING_DIR, `${by.seq}-${by.sourceName}`)
-    fs.renameSync(live, aside)
-    updatePage(by.id, { filePath: rel(aside) })
+  if (archive !== live && fs.existsSync(archive)) throw new Error('the archive path is occupied by another scan')
+  // checks done: files first, records last
+  const aside = path.join(HOLDING_DIR, `${by.seq}-${by.sourceName}`)
+  const liveThere = fs.existsSync(live)
+  if (liveThere) fs.renameSync(live, aside)
+  try {
+    fs.renameSync(kept, archive)
+  } catch (err) {
+    if (liveThere) fs.renameSync(aside, live)
+    throw err
   }
-  updatePage(by.id, { status: 'review', reason: 'undone', filedFrom: null })
+  updatePage(by.id, { status: 'review', reason: 'undone', filedFrom: null, ...(liveThere ? { filePath: rel(aside) } : {}) })
   moveAnnotations(by.id, old.id)
-  fs.renameSync(kept, archive)
   updatePage(old.id, { status: 'filed', filePath: rel(archive), reason: null })
   if (old.student && old.assignment) refreshPacket(old.student, old.assignment, old.scannedAt)
   return getPage(old.id)!
