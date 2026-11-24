@@ -139,7 +139,13 @@ export function undoPile(pileId: number): Pile {
   for (const p of taken) {
     if (p.status !== 'filed') continue
     const old = getDb().prepare("SELECT id FROM pages WHERE status = 'replaced' AND reason = ?").get(`replaced by rescan, page ${p.id}`) as { id: number } | undefined
-    if (old) restoreReplaced(old.id) // moves this page to holding itself
+    if (!old) continue
+    try {
+      restoreReplaced(old.id) // moves this page to holding itself
+    } catch (err) {
+      // undo never blocks: the earlier scan stays replaced and this page is taken back like any other
+      console.warn(`undo of pile ${pileId}: could not restore replaced scan ${old.id} (replaced by page ${p.id}): ${(err as Error).message}`)
+    }
   }
   for (const p of pilePages(pileId)) {
     if (p.status === 'review') {

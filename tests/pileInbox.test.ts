@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -264,5 +264,59 @@ describe('undo', () => {
       // the codes came back with the pages, so it settles by them again
     expect(filing.namePile(pile.id, 'W23').status).toBe('done')
     expect(db.pilePages(pile.id).every((p) => p.status === 'filed' && p.filedFrom === 'code')).toBe(true)
+  })
+
+  function assignment(code: string) {
+    db.upsertAssignment({ code, title: code, klass: 'Daisy', grade: 3, assignedOn: null, sheets: 2, twoSided: 1, tags: '', notes: null })
+  }
+  const codesFor = (student: string, a: string) => [`SWS1:${student}:${a}:1A`, `SWS1:${student}:${a}:2A`, `SWS1:${student}:${a}:2B`, `SWS1:${student}:${a}:1B`]
+
+  it('undo still works when a replaced scan cannot be restored', async () => {
+    assignment('W26')
+    const first = await settledPile('undo-gone1.pdf', ['SWS1:S03:W26:1A'])
+    const originalId = db.pilePages(first.id)[0].id
+    const pile = await settledPile('undo-gone2.pdf', codesFor('S03', 'W26'))
+    const old = db.getPage(originalId)!
+    expect(old.status).toBe('replaced')
+    fs.rmSync(path.join(config.DATA_DIR, old.filePath)) // the kept file is gone
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const out = filing.undoPile(pile.id)
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+    expect(out.status).toBe('new')
+    const pages = db.pilePages(pile.id)
+    expect(pages).toHaveLength(4)
+    expect(pages.every((p) => p.status === 'review' && p.reason === 'in pile')).toBe(true)
+    expect(db.getPage(originalId)!.status).toBe('replaced')
+  })
+
+  it('undo takes back not_work pages, marks held pages, leaves loose pages loose, and tolerates a second undo', async () => {
+    assignment('W24')
+    const pile = await settledPile('undo-mixed.pdf', codesFor('S01', 'W24'))
+    const [a, b, c, d] = db.pilePages(pile.id)
+    db.updatePage(a.id, { status: 'not_work', student: null, assignment: null, page: null, side: null })
+    db.updatePage(b.id, { status: 'review', reason: 'held for a check', student: null, assignment: null, page: null, side: null })
+    db.updatePage(c.id, { status: 'review', pile: null, reason: 'left loose', student: null, assignment: null, page: null, side: null })
+    filing.undoPile(pile.id)
+    expect(db.getPage(a.id)).toMatchObject({ status: 'review', reason: 'in pile', pile: pile.id })
+    expect(fs.existsSync(path.join(config.DATA_DIR, db.getPage(a.id)!.filePath))).toBe(true)
+    expect(db.getPage(b.id)).toMatchObject({ status: 'review', reason: 'in pile', pile: pile.id, student: null, filePath: b.filePath })
+    expect(db.getPage(c.id)).toMatchObject({ status: 'review', pile: null, reason: 'left loose' })
+    expect(db.getPage(d.id)).toMatchObject({ status: 'review', reason: 'in pile', student: 'S01', assignment: 'W24' })
+    expect(db.getPacket('S01', 'W24')).toBeUndefined()
+    const again = filing.undoPile(pile.id)
+    expect(again).toMatchObject({ status: 'new', assignment: null, held: [] })
+    expect(db.pilePages(pile.id).every((p) => p.status === 'review' && p.reason === 'in pile')).toBe(true)
+    expect(db.getPage(c.id)).toMatchObject({ pile: null })
+  })
+
+  it('undo keeps a packet that carries a note, with no sides, and a second undo leaves it', async () => {
+    assignment('W25')
+    const pile = await settledPile('undo-note.pdf', codesFor('S02', 'W25'))
+    db.setPacketNote('S02', 'W25', 'Good start')
+    filing.undoPile(pile.id)
+    expect(db.getPacket('S02', 'W25')).toMatchObject({ sides: 0, complete: 0, note: 'Good start' })
+    filing.undoPile(pile.id)
+    expect(db.getPacket('S02', 'W25')).toMatchObject({ sides: 0, note: 'Good start' })
   })
 })
