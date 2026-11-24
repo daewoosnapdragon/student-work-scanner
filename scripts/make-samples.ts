@@ -1,24 +1,39 @@
-// Makes fake scanned pages and drops them in the inbox, so the pipeline can be
-// watched end to end without a scanner. Each page is an A4 sheet at 150 dpi
-// with the title, a name line, some pencil-coloured writing, and the QR code in
-// the top right corner. One page has its code torn off so it lands in review,
-// and one is a rescan of a side already filed, which replaces the first scan on its own.
+// Makes a fake scanned pile and two loose pages and drops them in the inbox, so
+// the pipeline can be watched end to end without a scanner.
+//
+// The pile is one PDF of a two-sheet, two-sided assignment for three students,
+// fed the way a teacher feeds a real one: every front in pile order, then the
+// pile flipped and fed again, so the backs come out in reverse. Twelve pages.
+// Three things go wrong in it, the three that go wrong with real piles:
+//   - a missed code: the back of the first student's sheet 2 has no code; its
+//     front read, so the sheet files itself;
+//   - a wrong code: the back of the second student's sheet 1 carries the third
+//     student's code (a paste mistake), so the sheet is held to be checked;
+//   - a plain sheet: the second student's sheet 2 has no code on either side,
+//     next to the held sheet, so it is held too.
+// The two loose pages are single images: one carries a code that reads but
+// names a sheet the other assignment does not have, the other has no code.
+//
+// --nocode leaves the codes off every page of the pile: work from before the
+// codes, which waits on the Scan screen to be told its assignment.
 import fs from 'node:fs'
 import path from 'node:path'
 import sharp from 'sharp'
 import QRCode from 'qrcode'
+import { PDFDocument } from 'pdf-lib'
 import { INBOX_DIR } from '../server/config.js'
 import { formatCode } from '../server/codes.js'
 import { getAssignment, listAssignments, listStudents, openDb, upsertAssignment } from '../server/db.js'
 import type { Side } from '../shared/types.js'
 
-const W = 1240
+const W = 1240 // A4 at 150 dpi
 const H = 1754
 
-interface Spec { student: string; name: string; assignment: string; title: string; page: number; side: Side; torn?: boolean; tag?: string }
+/** What a page shows (title, name, sheet and side) and the code on it, if any. */
+interface Spec { student: string; name: string; assignment: string; title: string; page: number; side: Side; code: string | null }
 
 // Use whatever roster and assignments are loaded. With nothing loaded yet,
-// make a sample assignment for the first three active students.
+// make the sample assignments for the first three active students.
 openDb()
 const active = listStudents().filter((s) => s.active)
 const students = active.filter((s) => s.grade === active[0]?.grade && s.klass === active[0]?.klass).slice(0, 3)
@@ -26,8 +41,9 @@ if (students.length < 3) {
   console.error('Need at least three active students. Run npm run import:students -- your.csv or npm run seed:demo first.')
   process.exit(1)
 }
-let a = listAssignments().find((x) => x.klass === students[0].klass && (x.grade == null || x.grade === students[0].grade) && x.sheets >= 2 && x.twoSided)
-let single = listAssignments().find((x) => x.klass === students[0].klass && (x.grade == null || x.grade === students[0].grade) && x.sheets === 1 && !x.twoSided)
+const fits = (x: { klass: string; grade: number | null }) => x.klass === students[0].klass && (x.grade == null || x.grade === students[0].grade)
+let a = listAssignments().find((x) => fits(x) && x.sheets === 2 && x.twoSided)
+let single = listAssignments().find((x) => fits(x) && x.sheets === 1 && !x.twoSided)
 if (!a) {
   upsertAssignment({ code: 'W23', title: 'Short Vowel Sort', klass: students[0].klass, grade: students[0].grade, assignedOn: new Date().toISOString().slice(0, 10), sheets: 2, twoSided: 1, tags: 'phonics, short vowels', notes: 'made by npm run samples' })
   a = getAssignment('W23')!
@@ -38,28 +54,36 @@ if (!single) {
 }
 const [s1, s2, s3] = students
 const first = (s: { name: string }) => s.name.replace(/\s*\(.*\)\s*$/, '')
-const A = a.code, T = a.title, B = single.code, BT = single.title
+const nocode = process.argv.includes('--nocode')
 
-const specs: Spec[] = [
-  { student: s1.code, name: first(s1), assignment: A, title: T, page: 1, side: 'a' },
-  { student: s1.code, name: first(s1), assignment: A, title: T, page: 1, side: 'b' },
-  { student: s1.code, name: first(s1), assignment: A, title: T, page: 2, side: 'a' },
-  { student: s1.code, name: first(s1), assignment: A, title: T, page: 2, side: 'b' },
-  { student: s2.code, name: first(s2), assignment: A, title: T, page: 1, side: 'a' },
-  { student: s2.code, name: first(s2), assignment: A, title: T, page: 1, side: 'b' },
-  { student: s2.code, name: first(s2), assignment: A, title: T, page: 2, side: 'a' },
-  { student: s2.code, name: first(s2), assignment: A, title: T, page: 2, side: 'b', torn: true },
-  { student: s3.code, name: first(s3), assignment: A, title: T, page: 1, side: 'a' },
-  { student: s3.code, name: first(s3), assignment: B, title: BT, page: 1, side: 'a' },
-  { student: s2.code, name: first(s2), assignment: B, title: BT, page: 1, side: 'a' },
-  { student: s1.code, name: first(s1), assignment: A, title: T, page: 1, side: 'a', tag: 'rescan' },
+/** A page of the pile: who wrote it, and the code printed on it (the owner's own unless told otherwise). */
+function sheetSide(s: typeof s1, page: number, side: Side, code: 'own' | 'none' | { student: string } = 'own'): Spec {
+  const ref = { student: code === 'own' || code === 'none' ? s.code : code.student, assignment: a!.code, page, side }
+  return { student: s.code, name: first(s), assignment: a!.code, title: a!.title, page, side, code: code === 'none' || nocode ? null : formatCode(ref) }
+}
+
+// Sheets in pile order, front and back of each: [front, back].
+const sheets: Array<[Spec, Spec]> = [
+  [sheetSide(s1, 1, 'a'), sheetSide(s1, 1, 'b')],
+  [sheetSide(s1, 2, 'a'), sheetSide(s1, 2, 'b', 'none')], // missed code
+  [sheetSide(s2, 1, 'a'), sheetSide(s2, 1, 'b', { student: s3.code })], // wrong code
+  [sheetSide(s2, 2, 'a', 'none'), sheetSide(s2, 2, 'b', 'none')], // plain sheet
+  [sheetSide(s3, 1, 'a'), sheetSide(s3, 1, 'b')],
+  [sheetSide(s3, 2, 'a'), sheetSide(s3, 2, 'b')],
+]
+// Fronts in pile order, then the backs in reverse: page k's back is page 13 − k.
+const pile = [...sheets.map(([f]) => f), ...sheets.map(([, b]) => b).reverse()]
+
+const loose: Spec[] = [
+  // A code that reads, for a sheet 2 the one-sheet assignment does not have (a child who wrote on, with a label stuck on).
+  { student: s3.code, name: first(s3), assignment: single.code, title: single.title, page: 2, side: 'a', code: formatCode({ student: s3.code, assignment: single.code, page: 2, side: 'a' }) },
+  // No code at all.
+  { student: s1.code, name: first(s1), assignment: single.code, title: single.title, page: 1, side: 'a', code: null },
 ]
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
 
-async function makePage(spec: Spec, i: number) {
-  const code = formatCode(spec)
-  const qrPng = await QRCode.toBuffer(code, { type: 'png', margin: 2, errorCorrectionLevel: 'H', width: 180 })
+async function render(spec: Spec, i: number): Promise<Buffer> {
   const lines = [
     'the bug sat in the sun and it was hot.',
     'i put my cup on the rug.',
@@ -79,26 +103,33 @@ async function makePage(spec: Spec, i: number) {
     ${writing}
     ${[0, 1, 2, 3, 4].map((k) => `<line x1="120" y1="${1000 + k * 120}" x2="${W - 120}" y2="${1000 + k * 120}" stroke="#e6ddcf" stroke-width="2"/>`).join('')}
   </svg>`
-  // --nocode: work from before the codes existed, for trying File a stack
-  const composites: sharp.OverlayOptions[] = process.argv.includes('--nocode') ? [] : [{ input: qrPng, left: W - 180 - 80, top: 80 }]
-  if (spec.torn) {
-    // A ragged white patch over most of the code, like a torn corner.
-    const tear = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"><polygon points="${W - 300},0 ${W},0 ${W},320 ${W - 120},300 ${W - 200},200 ${W - 260},120" fill="#ffffff"/></svg>`)
-    composites.push({ input: tear, left: 0, top: 0 })
+  const composites: sharp.OverlayOptions[] = []
+  if (spec.code) {
+    const qr = await QRCode.toBuffer(spec.code, { type: 'png', margin: 2, errorCorrectionLevel: 'H', width: 180 })
+    composites.push({ input: qr, left: W - 180 - 80, top: 80 })
   }
-  const out = path.join(INBOX_DIR, `inbox_${String(400 + i).padStart(4, '0')}${spec.tag ? '_' + spec.tag : ''}.jpg`)
-  await sharp(Buffer.from(svg)).composite(composites).jpeg({ quality: 82 }).toFile(out)
-  // Give each file a later mtime than the one before so scan order is unambiguous.
-  const t = new Date(Date.now() - (specs.length - i) * 4000)
-  fs.utimesSync(out, t, t)
-  return out
+  return sharp(Buffer.from(svg)).composite(composites).jpeg({ quality: 82 }).toBuffer()
 }
 
 fs.mkdirSync(INBOX_DIR, { recursive: true })
-const made: string[] = []
-for (let i = 0; i < specs.length; i++) {
-  made.push(await makePage(specs[i], i))
-  // Space them out a little so a running watcher sees them arrive one by one.
-  if (process.argv.includes('--slow')) await new Promise((r) => setTimeout(r, 2500))
+
+// The pile: one PDF, one A4 page per scan.
+const doc = await PDFDocument.create()
+for (let i = 0; i < pile.length; i++) {
+  const img = await doc.embedJpg(await render(pile[i], i))
+  doc.addPage([595.28, 841.89]).drawImage(img, { x: 0, y: 0, width: 595.28, height: 841.89 })
 }
-console.log(`Wrote ${made.length} sample pages for ${s1.name}, ${s2.name} and ${s3.name} on ${A} and ${B} to ${INBOX_DIR}`)
+const pdf = path.join(INBOX_DIR, 'scan_0412.pdf')
+fs.writeFileSync(pdf, await doc.save())
+const t0 = new Date(Date.now() - 12000)
+fs.utimesSync(pdf, t0, t0)
+
+// The loose pages, each a later file than the pile so scan order is unambiguous.
+for (let i = 0; i < loose.length; i++) {
+  const out = path.join(INBOX_DIR, `scan_${String(413 + i).padStart(4, "0")}.jpg`)
+  fs.writeFileSync(out, await render(loose[i], pile.length + i))
+  const t = new Date(Date.now() - (loose.length - i) * 4000)
+  fs.utimesSync(out, t, t)
+}
+
+console.log(`Wrote a ${pile.length}-page pile of ${a.code} for ${s1.name}, ${s2.name} and ${s3.name}${nocode ? ' with no codes' : ''}, and ${loose.length} loose pages, to ${INBOX_DIR}`)
