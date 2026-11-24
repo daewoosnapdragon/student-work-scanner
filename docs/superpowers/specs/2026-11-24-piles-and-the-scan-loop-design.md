@@ -112,7 +112,11 @@ codes; `server/piles.ts`, fully unit-tested):
 1. *Which assignment.* The most common assignment among the codes that read.
    If no code read, the pile is `new` with no assignment and waits for the
    teacher to name it on the Scan screen (§3); nothing files until then.
-   Pages whose code names a different assignment than the pile's are held.
+   Pages whose code names a different assignment than the pile's go to loose
+   pages: they have nothing to do with this pile, and the pile check would
+   only offer them the wrong roster. Once a pile has been named (or undone and
+   renamed), the named assignment is the pile's; codes for anything else go
+   loose, never override it.
 2. *Fronts and backs.* "Two-sided" here means the assignment waits for at
    least one back (`sidesFor(a)` has a `b` side): an assignment whose backs
    all stay with the student (`expect = 1a,2a`) is fed fronts only and is
