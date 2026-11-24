@@ -225,3 +225,43 @@ describe('a PDF settles as a pile', () => {
     expect(loose.every((p) => p.pile === null && /no student S09/.test(p.reason ?? ''))).toBe(true)
   })
 })
+
+describe('undo', () => {
+  async function settledPile(name: string, codes: string[]) {
+    await processAll(await pilePdf(name, codes))
+    return db.listPiles().find((x) => x.origin.endsWith(name) || db.pilePages(x.id).some((p) => p.sourceName.startsWith(name.replace('.pdf', '__'))))!
+  }
+
+  it('undo puts a pile back as it arrived, restores what it replaced, and keeps a scored packet', async () => {
+    db.upsertAssignment({ code: 'W23', title: 'Week 23', klass: 'Daisy', grade: 3, assignedOn: null, sheets: 2, twoSided: 1, tags: '', notes: null })
+    const first = await settledPile('undo-first.pdf', ['SWS1:S01:W23:1A'])
+    const originalId = db.pilePages(first.id)[0].id
+    expect(db.getPage(originalId)).toMatchObject({ status: 'filed', student: 'S01', assignment: 'W23' })
+    db.setPacketScore('S01', 'W23', 3, 4, null)
+    const pile = await settledPile('undo-second.pdf', ['SWS1:S01:W23:1A', 'SWS1:S01:W23:2A', 'SWS1:S01:W23:2B', 'SWS1:S01:W23:1B'])
+    expect(db.getPile(pile.id)!.status).toBe('done')
+    expect(db.getPage(originalId)!.status).toBe('replaced')
+    const filing2 = filing.undoPile(pile.id)
+    expect(filing2.id).toBe(pile.id)
+    expect(db.getPile(pile.id)).toMatchObject({ status: 'new', assignment: null, held: [], sheets: null, twoSided: null, settledAt: null })
+    const pages = db.pilePages(pile.id)
+    expect(pages).toHaveLength(4)
+    expect(pages.every((p) => p.status === 'review' && p.reason === 'in pile' && p.student === null && p.assignment === null && p.page === null && p.side === null && p.filedFrom === null)).toBe(true)
+    expect(pages.every((p) => fs.existsSync(path.join(config.DATA_DIR, p.filePath)) && p.filePath.startsWith('holding'))).toBe(true)
+    expect(db.getPage(originalId)).toMatchObject({ status: 'filed' })
+    expect(db.packetPages('S01', 'W23').map((p) => p.id)).toEqual([originalId])
+    expect(db.getPacket('S01', 'W23')).toMatchObject({ score: 3, sides: 1 })
+  })
+
+  it('undo deletes a packet that carries nothing', async () => {
+    const pile = await settledPile('undo-bare.pdf', ['SWS1:S02:W23:1A', 'SWS1:S02:W23:2A', 'SWS1:S02:W23:2B', 'SWS1:S02:W23:1B'])
+    expect(db.getPacket('S02', 'W23')).toMatchObject({ sides: 4 })
+    filing.undoPile(pile.id)
+    expect(db.getPacket('S02', 'W23')).toBeUndefined()
+    expect(db.getPile(pile.id)!.status).toBe('new')
+      // the codes were taken back with the filing, so it settles by position and waits on the check screen
+    const again = filing.namePile(pile.id, 'W23')
+    expect(again).toMatchObject({ status: 'checking', assignment: 'W23' })
+    expect(again.held).toHaveLength(2)
+  })
+})

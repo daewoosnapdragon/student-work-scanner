@@ -5,9 +5,12 @@
 // This module files through pipeline.ts (fileFromReview); pipeline.ts loads it
 // lazily when a pile's last page is in, so there is no import cycle at load.
 
-import { getAssignment, getPage, getPile, getStudent, listStudents, packetPages, packetsForAssignment, pilePages, printedSidesFor, sidesFor, updatePage, updatePile } from './db.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import { HOLDING_DIR } from './config.js'
+import { emptyOrDeletePacket, getAssignment, getDb, getPage, getPile, getStudent, listStudents, packetPages, packetsForAssignment, pilePages, printedSidesFor, sidesFor, updatePage, updatePile } from './db.js'
 import { broadcast } from './events.js'
-import { fileFromReview, pileArriving } from './pipeline.js'
+import { abs, fileFromReview, pileArriving, rel, restoreReplaced } from './pipeline.js'
 import { pairSheets, pileAssignment, settlePile, type PileInput, type SettleResult } from './piles.js'
 import type { Assignment, HeldSheet, Page, PageRef, Pile, Side } from '../shared/types.js'
 
@@ -119,6 +122,43 @@ export function namePile(pileId: number, assignment: string): Pile {
   if (!getAssignment(code)) throw new Error(`no assignment ${code}`)
   if (pilePages(pileId).some((p) => p.status !== 'review')) throw new Error('this pile has filed pages; undo it before naming it again')
   return settle(pileId, code)
+}
+
+/**
+ * Takes a pile back to as it arrived: every page it filed or set aside returns to it, unsettled, and
+ * the pile waits to be named again. A scan a filed page had replaced is restored first. Pages the
+ * teacher sent loose stay loose; a packet left empty is deleted only if it carries nothing.
+ */
+export function undoPile(pileId: number): Pile {
+  const pile = mustPile(pileId)
+  const emptied = new Map<string, [string, string]>()
+  for (const p of pilePages(pileId)) {
+    if (p.status !== 'filed' && p.status !== 'not_work') {
+      if (p.status === 'review') updatePage(p.id, { reason: 'in pile' })
+      continue
+    }
+    if (p.student && p.assignment) emptied.set(`${p.student}/${p.assignment}`, [p.student, p.assignment])
+    if (p.status === 'filed') {
+      const old = getDb().prepare("SELECT id FROM pages WHERE status = 'replaced' AND reason = ?").get(`replaced by rescan, page ${p.id}`) as { id: number } | undefined
+      if (old) restoreReplaced(old.id) // moves this page to holding itself
+    }
+    const now = getPage(p.id)!
+    let filePath = now.filePath
+    const from = abs(now.filePath)
+    if (now.status === 'filed' || now.status === 'not_work') {
+      const dest = path.join(HOLDING_DIR, `${now.seq}-${now.sourceName}`)
+      if (from !== dest && fs.existsSync(from)) {
+        fs.renameSync(from, dest)
+        filePath = rel(dest)
+      }
+    }
+    updatePage(p.id, { status: 'review', filePath, reason: 'in pile', filedFrom: null, student: null, assignment: null, page: null, side: null })
+  }
+  for (const [student, assignment] of emptied.values()) emptyOrDeletePacket(student, assignment)
+  updatePile(pile.id, { status: 'new', assignment: null, sheets: null, twoSided: null, held: [], settledAt: null })
+  const out = getPile(pileId)!
+  broadcast('pile', out)
+  return out
 }
 
 /** Files a held sheet as the given student's sheet: its front as side a, its back as side b. */

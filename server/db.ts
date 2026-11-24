@@ -237,6 +237,17 @@ export function refreshPacketsFor(assignment: string) {
 export function deletePacket(student: string, assignment: string) {
   getDb().prepare('DELETE FROM packets WHERE student = ? AND assignment = ?').run(student, assignment)
 }
+/**
+ * A packet that lost its last page: deleted when it carries nothing, kept (counting 0 sides) when it holds
+ * a score, note, feedback, analysis, corrections or criteria. A packet that still has pages is just recounted.
+ */
+export function emptyOrDeletePacket(student: string, assignment: string) {
+  const pk = getPacket(student, assignment)
+  if (!pk) return
+  const bare = pk.score == null && pk.note == null && pk.feedback == null && pk.analysedAt == null && pk.corrections == null && pk.criteria == null
+  if (bare && packetPages(student, assignment).length === 0) deletePacket(student, assignment)
+  else refreshPacket(student, assignment, new Date().toISOString())
+}
 /** Remove an assignment that has no work filed under it. Returns false when pages or packets exist. */
 export function deleteAssignment(code: string): boolean {
   const d = getDb()

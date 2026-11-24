@@ -4,7 +4,7 @@ import sharp from 'sharp'
 import * as mupdf from 'mupdf'
 import { ARCHIVE_DIR, DATA_DIR, HOLDING_DIR, INBOX_DIR, INCOMPLETE_AFTER_MIN, ORIGINALS_DIR, PDF_DPI, THUMBS_DIR } from './config.js'
 import { decodePage, makeThumb } from './decode.js'
-import { closePacketIncomplete, deletePacket, getAssignment, getPile, getPileByOrigin, getStudent, insertPage, insertPile, upsertAssignment, moveAnnotations, nextSeq, openPackets, packetPages, pilePages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
+import { closePacketIncomplete, emptyOrDeletePacket, getAssignment, getPile, getPileByOrigin, getStudent, insertPage, insertPile, upsertAssignment, moveAnnotations, nextSeq, openPackets, packetPages, pilePages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
 import { broadcast } from './events.js'
 import type { Assignment, Packet, Page, PageRef, Pile, Side } from '../shared/types.js'
 import { shortSide } from './codes.js'
@@ -395,8 +395,7 @@ export function unfilePage(pageId: number): Page {
   const dest = path.join(HOLDING_DIR, `${p.seq}-${p.sourceName}`)
   fs.renameSync(abs(p.filePath), dest)
   updatePage(pageId, { status: 'review', filePath: rel(dest), reason: `Sent back from ${p.student} · ${p.assignment}`, filedFrom: null, decoded: null, student: null, assignment: null, page: null, side: null })
-  if (packetPages(p.student, p.assignment).length === 0) deletePacket(p.student, p.assignment)
-  else refreshPacket(p.student, p.assignment, new Date().toISOString())
+  emptyOrDeletePacket(p.student, p.assignment)
   const updated = getPage(pageId)!
   broadcast('review', updated)
   return updated
