@@ -1,16 +1,18 @@
-import { useEffect, useMemo, useState, type DragEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { get, post, useFetch, fileUrl, fmtTime, sideLabel, type Assignment, type Page, type ReviewItem, type Student } from '../api'
 import { useViewer } from '../components/Viewer'
 import { sidesOf } from '../../../shared/codeInput'
-import { batchItems, clashes, cycleSide, place, unplace, type Placements } from './sortLogic'
+import { applyTyped, batchItems, clashes, cycleSide, place, unplace, type Placements } from './sortLogic'
+import { readTyped, type Typed } from './typed'
 
 interface ReviewData { items: ReviewItem[]; pages: Record<string, Page>; assignments: Assignment[] }
 interface AssignmentDetail { assignment: Assignment; expected: number; students: Array<Student & { packet: unknown | null; pages: Page[] }> }
 
-// Pages the scanner could not place, sorted by hand: drag a page (or every
-// selected page) onto a student, and it takes the next open side.
-export default function Sort() {
+// Pages that are not part of any pile, sorted by hand: drag a page (or every
+// selected page) onto a student, and it takes the next open side. Or type what
+// the label says and apply it to the selected pages.
+export default function Loose() {
   const nav = useNavigate()
   const { data, error } = useFetch<ReviewData>('/api/review')
   const [assignment, setAssignment] = useState('')
@@ -22,6 +24,11 @@ export default function Sort() {
   const [err, setErr] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
   const { open: openViewer } = useViewer()
+  const [typed, setTyped] = useState('')
+  const [matches, setMatches] = useState<Student[]>([])
+  const [note, setNote] = useState<string | null>(null)
+  const [pending, setPending] = useState<{ ids: number[]; to: Typed } | null>(null)
+  const typedRef = useRef<HTMLInputElement>(null)
 
   const pages = useMemo(() => (data ? data.items.filter((i) => i.kind === 'page' && i.pageId).map((i) => data.pages[i.pageId!]).filter(Boolean).sort((a, b) => a.seq - b.seq) : []), [data])
   const byId = useMemo(() => new Map(pages.map((p) => [p.id, p])), [pages])
@@ -31,8 +38,17 @@ export default function Sort() {
     if (!assignment) return setDetail(null)
     get<AssignmentDetail>(`/api/assignments/${assignment}`).then((d) => { setDetail(d); setPlacements(new Map()); setErr(null) }).catch((e) => setErr(e.message))
   }, [assignment])
-  // Pages filed meanwhile (by the scanner, or from Review in another tab) leave the sort.
+  // Pages filed meanwhile (by the scanner, or in another tab) leave the sort.
   useEffect(() => { setPlacements((pl) => new Map([...pl].filter(([id]) => byId.has(id)))); setSelected((s) => new Set([...s].filter((id) => byId.has(id)))) }, [byId])
+
+  // A name at the front of what was typed is looked up on the roster.
+  const typedName = useMemo(() => readTyped(typed, []).name ?? '', [typed])
+  useEffect(() => {
+    if (!typedName) return setMatches([])
+    const t = setTimeout(() => get<Student[]>(`/api/students/search?q=${encodeURIComponent(typedName)}`).then(setMatches).catch(() => setMatches([])), 150)
+    return () => clearTimeout(t)
+  }, [typedName])
+  const read = useMemo(() => readTyped(typed, matches), [typed, matches])
 
   const sides = detail ? sidesOf(detail.assignment) : []
   const filedBy = useMemo(() => new Map((detail?.students ?? []).map((s) => [s.code, new Set(s.pages.map((p) => `${p.page}${p.side}`))])), [detail])
@@ -41,6 +57,32 @@ export default function Sort() {
   const placedBy = (code: string) => [...placements.entries()].filter(([, p]) => p.student === code).map(([id, p]) => ({ pg: byId.get(id)!, ...p })).filter((x) => x.pg).sort((a, b) => a.pg.seq - b.pg.seq)
   const problems = clashes(placements)
   const touched = new Set([...placements.values()].map((p) => p.student)).size
+
+  function applyRead(ids: number[], to: Typed) {
+    if (!to.student) return
+    if (!students.some((s) => s.code === to.student)) return setNote(`${to.student} is not in ${detail?.assignment.klass ?? 'this class'}.`)
+    setPlacements((pl) => applyTyped(pl, ids, { student: to.student!, page: to.page, side: to.side }, sides, filedBy.get(to.student!) ?? new Set()))
+    setSelected(new Set())
+    setTyped('')
+    setNote(null)
+  }
+  function applyTypedLabel() {
+    if (!read.student) return setNote(typedName && matches.length === 0 ? `No student called ${typedName}.` : matches.length > 1 ? 'Which one? Choose a student below.' : 'Student code, then the side: S07 W23 2 back.')
+    const ids = [...selected].filter((id) => !placements.has(id))
+    if (!ids.length) return setNote('Select pages in the tray first, then type their label.')
+    if (read.assignment && read.assignment !== assignment) {
+      if (!data?.assignments.some((a) => a.code === read.assignment)) return setNote(`${read.assignment} is not an assignment yet.`)
+      setPending({ ids, to: read })
+      setAssignment(read.assignment)
+      return
+    }
+    if (!detail) return setNote('Choose the assignment first, or type it: S07 W23 2 back.')
+    applyRead(ids, read)
+  }
+  // The typed label named another assignment: apply once its students have loaded.
+  useEffect(() => {
+    if (pending && detail && detail.assignment.code === pending.to.assignment) { applyRead(pending.ids, pending.to); setPending(null) }
+  })
 
   // Dragging a selected page carries every selected page; an unselected one goes alone.
   function dragIds(id: number) { return selected.has(id) ? [...selected] : [id] }
@@ -95,6 +137,7 @@ export default function Sort() {
       const t = e.target as HTMLElement
       if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return
       if (e.key === 'Escape') setSelected(new Set())
+      else if (e.key === '/') { e.preventDefault(); typedRef.current?.focus() }
       else if ((e.key === 'a' || e.key === 'A') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); setSelected(new Set(tray.map((p) => p.id))) }
     }
     window.addEventListener('keydown', onKey)
@@ -118,9 +161,9 @@ export default function Sort() {
   return (
     <main style={{ gap: 24 }}>
       <section className="col" style={{ gap: 10 }}>
-        <div className="over"><Link to="/review">Review</Link> <span className="muted">/</span> Sort onto students</div>
-        <h1 className="serif title">Sort onto students</h1>
-        <p className="lede">Choose the assignment, then drag each page from the tray onto the student it belongs to. A page takes the next side that student is missing; click the side to change it. Select several pages first (click, shift-click for a run) to drag them together, or click a student's Put here.</p>
+        <div className="over"><Link to="/scan">Scan</Link> <span className="muted">/</span> Loose pages</div>
+        <h1 className="serif title">Loose pages</h1>
+        <p className="lede">Pages that are not part of any pile: single scans, pages a jumbled pile could not settle, and sheets you left loose. Drag each onto its student.</p>
       </section>
 
       <section className="row" style={{ gap: 16, alignItems: 'flex-end' }}>
@@ -130,23 +173,42 @@ export default function Sort() {
         {detail && <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Find a student</span><input type="text" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="name or code" style={{ width: 160 }} /></label>}
         {detail && <span className="muted small">{sides.length} side{sides.length === 1 ? '' : 's'} per student · {students.length} students</span>}
         <span className="muted small" style={{ marginLeft: 'auto' }}>{tray.length} of {pages.length} pages still in the tray{selected.size ? ` · ${selected.size} selected` : ''}</span>
-        <Link className="btn" to="/review/stack" title="A pile scanned in order, one student after another: cut by count instead">File a stack instead</Link>
       </section>
 
-      {pages.length === 0 && <div className="notice">No pages are waiting in review. Scan the pile, then come back here.</div>}
+      {pages.length === 0 && <div className="notice">No loose pages. Everything the scanner saw is in a pile or filed. <Link to="/scan">Back to Scan</Link></div>}
+
+      {pages.length > 0 && (
+        <section className="col" style={{ gap: 4 }}>
+          <label className="col" style={{ gap: 4 }}>
+            <span className="over">Type what the label says</span>
+            <input ref={typedRef} type="text" value={typed} onChange={(e) => { setTyped(e.target.value); setNote(null) }} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyTypedLabel() } }} placeholder="S07 W23 2 back · or a name: Minji W23 2 back" autoComplete="off" style={{ fontSize: 15, maxWidth: 420 }} />
+          </label>
+          <span className="muted small">
+            {note ? <span className="err">{note}</span>
+              : typed.trim() && read.student ? <>Read as <b>{students.find((s) => s.code === read.student)?.name ?? matches[0]?.name ?? read.student}</b>{read.page && read.side ? `, ${sideLabel(read.page, read.side)}` : ''}. Enter puts the {selected.size || 'selected'} page{selected.size === 1 ? '' : 's'} there.</>
+              : typed.trim() && matches.length > 1 ? 'Which one?'
+              : <>Select pages in the tray, type the label, press Enter. <kbd className="key">/</kbd> jumps here.</>}
+          </span>
+          {typed.trim() && matches.length > 1 && (
+            <div className="card" style={{ padding: 6, gap: 2, maxWidth: 420 }}>
+              {matches.map((m) => <button key={m.code} type="button" className="tab" style={{ textAlign: 'left', padding: '4px 6px' }} onClick={() => { const rest = typed.trim().split(/[\s:|·,/]+/).filter((t) => /\d/.test(t)); setTyped([m.code, ...rest].join(' ')); setMatches([m]) }}>{m.name} · {m.code} · {m.klass}</button>)}
+            </div>
+          )}
+        </section>
+      )}
 
       {pages.length > 0 && (
         <section className="card" onDragOver={(e) => { e.preventDefault(); setOver('tray') }} onDragLeave={() => setOver(null)} onDrop={(e) => { setOver(null); setPlacements((pl) => unplace(pl, dropped(e))) }} style={{ borderColor: over === 'tray' ? 'var(--accent)' : undefined, borderStyle: over === 'tray' ? 'dashed' : undefined }}>
           <div className="between">
-            <div className="over">The tray, in scan order</div>
+            <div className="over">The tray, in scan order <span className="muted small" style={{ textTransform: 'none', letterSpacing: 0, marginLeft: 8 }}><kbd className="key">Esc</kbd> clear selection · <kbd className="key">{/Mac/.test(navigator.platform) ? '⌘' : 'Ctrl'}</kbd><kbd className="key">A</kbd> select all</span></div>
             <div className="row" style={{ gap: 8 }}>
               {tray.length > 0 && <button className="btn" onClick={() => setSelected(new Set(tray.map((p) => p.id)))}>Select all</button>}
-              {selected.size > 0 && <button className="btn" onClick={() => setSelected(new Set())}>Clear selection <span className="muted">Esc</span></button>}
+              {selected.size > 0 && <button className="btn" onClick={() => setSelected(new Set())}>Clear selection</button>}
             </div>
           </div>
           <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'flex-start', minHeight: 60 }}>
             {tray.map((pg) => thumb(pg))}
-            {tray.length === 0 && <span className="muted small">Every page is on a student. Drop one here to take it back.</span>}
+            {tray.length === 0 && <span className="muted small">Every page is on a student. Drop one here to take it back, or file them below.</span>}
           </div>
         </section>
       )}

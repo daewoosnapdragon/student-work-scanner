@@ -3,7 +3,8 @@ import ReactDOM from 'react-dom/client'
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'
 import './styles.css'
 import Shell from './components/Shell'
-import Scan, { NotYet } from './pages/Scan'
+import Scan from './pages/Scan'
+import Loose from './pages/Loose'
 import PileCheck from './pages/PileCheck'
 import ScanLog from './pages/ScanLog'
 import Students from './pages/Students'
@@ -22,7 +23,7 @@ const router = createBrowserRouter([
       { path: 'scan', element: <Scan /> },
       { path: 'scan/log', element: <ScanLog /> },
       { path: 'scan/pile/:id', element: <PileCheck /> },
-      { path: 'scan/loose', element: <NotYet /> },
+      { path: 'scan/loose', element: <Loose /> },
       { path: 'today', element: <Navigate to="/scan" replace /> },
       { path: 'students', element: <Students /> },
       { path: 'students/:code', element: <StudentPage /> },

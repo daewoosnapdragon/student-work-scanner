@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { originLabel } from '../web/src/pages/Review'
-import { readTyped } from '../web/src/pages/typed'
+import { originLabel, readTyped } from '../web/src/pages/typed'
 
 const minji = { code: 'S07', name: 'Minji Park', nameKo: null, klass: 'Daisy', grade: 3, homeroom: null, active: 1, externalId: null }
 const minsu = { ...minji, code: 'S08', name: 'Minsu Park' }

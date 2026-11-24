@@ -12,18 +12,6 @@ interface ScanData {
 
 const hhmm = (iso: string) => fmtTime(iso).slice(0, 5)
 
-// Stands in for the pile check and loose-page screens until they are built.
-export function NotYet() {
-  return (
-    <main>
-      <section className="col">
-        <div className="over"><Link to="/scan">Scan</Link></div>
-        <p className="lede">Coming in the next step.</p>
-      </section>
-    </main>
-  )
-}
-
 export default function Scan() {
   const { data, error } = useFetch<ScanData>('/api/scan')
   const { data: assignments } = useFetch<Assignment[]>('/api/assignments')

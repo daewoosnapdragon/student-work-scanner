@@ -60,3 +60,17 @@ export function clashes(placements: Placements): Array<{ student: string; side: 
   }
   return [...seen.entries()].filter(([, n]) => n > 1).map(([k]) => { const [student, side] = k.split('|'); return { student, side } })
 }
+
+// A typed label applied to the selected pages: with a full page and side the
+// first page gets exactly that (when the assignment has it) and the rest take
+// the next open sides; with a student only they all take open sides, as a drop does.
+export function applyTyped(placements: Placements, pageIds: number[], to: { student: string; page?: number; side?: Side }, sides: SideRef[], filed: Set<string>): Placements {
+  if (!pageIds.length) return placements
+  const exact = to.page != null && to.side != null && sides.some((s) => s.page === to.page && s.side === to.side)
+  if (!exact) return place(placements, pageIds, to.student, sides, filed)
+  const [first, ...rest] = pageIds
+  const next = new Map(placements)
+  for (const id of pageIds) next.delete(id)
+  next.set(first, { student: to.student, page: to.page!, side: to.side! })
+  return place(next, rest, to.student, sides, filed)
+}

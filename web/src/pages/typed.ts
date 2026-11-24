@@ -21,3 +21,9 @@ export function readTyped(text: string, matches: Student[]): Typed {
   const r2 = parseLooseCode([code, ...rest].join(' '))
   return r2 ? { name, student: code, assignment: r2.assignment, page: r2.page, side: r2.side } : { name, student: code }
 }
+
+// Where a page came from: the PDF and page it was cut from, else the scanned file.
+export function originLabel(p: { origin: string | null; originPage: number | null; sourceName: string }): string {
+  if (p.origin) return `${p.origin.split('/').pop()}, page ${p.originPage ?? '?'}`
+  return p.sourceName
+}
