@@ -45,6 +45,23 @@ export interface Assignment {
   createdAt: string
 }
 
+export type PileStatus = 'new' | 'checking' | 'done' | 'jumbled'
+export interface HeldGuess { student: string; studentName: string; page: number; why: string }
+export interface HeldSheet { sheet: number; pages: [number, number | null]; why: string; guesses: HeldGuess[] }
+export interface Pile {
+  id: number
+  origin: string
+  name: string
+  assignment: string | null
+  pages: number
+  sheets: number | null
+  twoSided: number | null
+  status: PileStatus
+  held: HeldSheet[]
+  createdAt: string
+  settledAt: string | null
+}
+
 export interface Page {
   id: number
   status: PageStatus
@@ -61,11 +78,14 @@ export interface Page {
   height: number | null
   decoded: string | null // raw QR text if any
   reason: string | null // why it is in review
-  filedFrom: 'code' | 'review' | null
+  filedFrom: 'code' | 'review' | 'pile' | null
   /** The PDF this page was rendered from, relative to the data dir (under originals/); null for a page the scanner saved as an image. */
   origin?: string | null
   /** 1-based page number within that PDF. */
   originPage?: number | null
+  /** The pile (a scanned PDF filed sheet by sheet) this page belongs to, and its 1-based place in it. */
+  pile?: number | null
+  pileIndex?: number | null
   /** How many comments the teacher has pinned to this page; set on lists that show a badge. */
   annotations?: number
 }
@@ -97,6 +117,8 @@ export interface Packet {
   claudeScore: number | null
   /** Who gave the score shown: Claude, or the teacher by hand (which a re-analysis never overwrites). */
   scoreBy: 'claude' | 'teacher' | null
+  /** When the student's feedback slip was last printed; null if never. */
+  feedbackPrintedAt: string | null
 }
 
 export type RatedBy = 'claude' | 'teacher'
