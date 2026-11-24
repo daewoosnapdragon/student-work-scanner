@@ -2,8 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { get, post, useFetch, fileUrl, type Assignment, type HeldSheet, type Page, type Pile, type Student } from '../api'
 import { useViewer, type ViewerPage } from '../components/Viewer'
-import { cutPackets, nextSheetNumber } from './pileCheckLogic'
-import { readTyped } from './typed'
+import { cutPackets, nextSheetNumber, packetSize, resolveTyped, typedQuery, type Search } from './pileCheckLogic'
 
 type SheetStatus = 'filed' | 'held' | 'loose' | 'not_work' | 'missing'
 interface SheetRow { sheet: number; front: Page | null; back: Page | null; status: SheetStatus; student: string | null; studentName: string | null }
@@ -23,7 +22,9 @@ export default function PileCheck() {
   const { data, error } = useFetch<PileData>(`/api/piles/${id}`, bump)
   // what was filed or left loose on this visit, newest last
   const [checked, setChecked] = useState<Checked[]>([])
-  const done = (c: Checked[]) => { setChecked((was) => [...was, ...c]); setBump((b) => b + 1) }
+  // what went wrong with the last filing, kept here so it outlives the part of the screen that filed
+  const [note, setNote] = useState<string | null>(null)
+  const done = (c: Checked[], problem: string | null = null) => { setChecked((was) => [...was, ...c]); setNote(problem); setBump((b) => b + 1) }
 
   if (error) return <main><p className="err">{error}</p></main>
   if (!data) return <main><p className="muted">Loading</p></main>
@@ -59,10 +60,15 @@ export default function PileCheck() {
         <HeldOne data={data} assignment={a} onDone={done} />
       )}
 
-      {checked.length > 0 && (
-        <section className="row sep" style={{ gap: 18 }}>
-          <span className="over quiet">Checked so far</span>
-          {checked.map((c, i) => <span key={i} className="small">✓ sheet {c.sheet} → {c.to}</span>)}
+      {(checked.length > 0 || note) && (
+        <section className="col sep" style={{ gap: 8 }}>
+          {checked.length > 0 && (
+            <div className="row" style={{ gap: 18 }}>
+              <span className="over quiet">Checked so far</span>
+              {checked.map((c, i) => <span key={i} className="small">✓ sheet {c.sheet} → {c.to}</span>)}
+            </div>
+          )}
+          {note && <p className="err" style={{ margin: 0 }}>{note}</p>}
         </section>
       )}
     </main>
@@ -71,7 +77,7 @@ export default function PileCheck() {
 
 // ---------- held sheets, one at a time ----------
 
-function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: Assignment; onDone: (c: Checked[]) => void }) {
+function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: Assignment; onDone: (c: Checked[], problem?: string | null) => void }) {
   const { pile, sheets } = data
   const held = useMemo(() => [...data.held].sort((x, y) => x.sheet - y.sheet), [data.held])
   const [idx, setIdx] = useState(0)
@@ -84,9 +90,10 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
   const otherN = guesses.length + 1
   const [pick, setPick] = useState(1)
   const [typed, setTyped] = useState('')
-  const [matches, setMatches] = useState<Student[]>([])
-  const [lacking, setLacking] = useState<number[]>([])
-  const [sheetPick, setSheetPick] = useState<number | null>(null)
+  const [search, setSearch] = useState<Search | null>(null)
+  // the sheets a student still lacks and the sheet number chosen, each tied to the student they are for
+  const [lackingFor, setLackingFor] = useState<{ student: string; lacking: number[] } | null>(null)
+  const [sheetPick, setSheetPick] = useState<{ student: string; n: number } | null>(null)
   const [rotate, setRotate] = useState(0)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -94,56 +101,56 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
   const { open: openViewer } = useViewer()
 
   useEffect(() => {
-    setPick(1); setTyped(''); setMatches([]); setSheetPick(null); setRotate(0); setErr(null)
+    setPick(1); setTyped(''); setSearch(null); setLackingFor(null); setSheetPick(null); setRotate(0); setErr(null)
   }, [h.sheet])
 
-  // A name, or a bare student code, is looked up on the roster.
-  const query = useMemo(() => {
-    const t = readTyped(typed, [])
-    if (t.name) return t.name
-    return !t.student && /^[a-z]*\d+$/i.test(typed.trim()) ? typed.trim() : ''
-  }, [typed])
+  // A name, or a bare student code, is looked up on the roster; the answer carries the text it was for.
+  const query = useMemo(() => typedQuery(typed), [typed])
   useEffect(() => {
-    if (!query) return setMatches([])
-    const t = setTimeout(() => get<Student[]>(`/api/students/search?q=${encodeURIComponent(query)}`).then(setMatches).catch(() => setMatches([])), 150)
-    return () => clearTimeout(t)
+    if (!query) return
+    let alive = true
+    const t = setTimeout(() => get<Student[]>(`/api/students/search?q=${encodeURIComponent(query)}`)
+      .then((list) => alive && setSearch({ q: query, list }))
+      .catch(() => alive && setSearch({ q: query, list: [] })), 150)
+    return () => { alive = false; clearTimeout(t) }
   }, [query])
-  useEffect(() => { if (typed.trim()) setPick(otherN) }, [typed, otherN])
+  const onType = (text: string) => { setTyped(text); setSearch(null); setPick(otherN); setErr(null) }
 
-  const typedAs = useMemo(() => {
-    if (!typed.trim()) return null
-    const t = readTyped(typed, matches)
-    const exact = matches.find((m) => m.code.toUpperCase() === typed.trim().toUpperCase())
-    const code = exact?.code ?? t.student?.toUpperCase() ?? null
-    if (!code) return null
-    const who = matches.find((m) => m.code === code) ?? data.roster.find((s) => s.code === code)
-    return { student: code, name: who?.name ?? code, page: t.assignment === a.code ? (t.page ?? null) : null }
-  }, [typed, matches, data.roster, a.code])
+  const resolved = resolveTyped(typed, search, a.code, data.roster)
+  const typedAs = resolved.kind === 'one' ? resolved : null
 
   // The sheets the typed student still lacks, for the sheet number on offer.
   useEffect(() => {
-    if (!typedAs) return setLacking([])
+    if (!typedAs) return
     let alive = true
-    get<Page[]>(`/api/packets/${a.code}/${typedAs.student}/pages`)
+    const student = typedAs.student
+    get<Page[]>(`/api/packets/${a.code}/${student}/pages`)
       .then((ps) => {
         if (!alive) return
         const have = new Set(ps.map((p) => p.page))
-        setLacking(Array.from({ length: a.sheets }, (_, i) => i + 1).filter((n) => !have.has(n)))
+        setLackingFor({ student, lacking: Array.from({ length: a.sheets }, (_, i) => i + 1).filter((n) => !have.has(n)) })
       })
-      .catch(() => alive && setLacking([]))
+      .catch(() => alive && setLackingFor({ student, lacking: Array.from({ length: a.sheets }, (_, i) => i + 1) }))
     return () => { alive = false }
   }, [typedAs?.student, a.code, a.sheets])
-  useEffect(() => setSheetPick(null), [typedAs?.student])
+  const lacking = typedAs && lackingFor?.student === typedAs.student ? lackingFor.lacking : null
 
   const guess = pick <= guesses.length ? guesses[pick - 1] : null
-  const otherSheet = sheetPick ?? nextSheetNumber(lacking, typedAs?.page ?? null)
+  const otherSheet = typedAs && sheetPick?.student === typedAs.student ? sheetPick.n : nextSheetNumber(lacking ?? [], typedAs?.page ?? null)
+  // Someone else files only once the name has resolved and that student's sheets are known
   const target = guess
     ? { student: guess.student, name: guess.studentName, page: guess.page }
-    : typedAs ? { student: typedAs.student, name: typedAs.name, page: otherSheet } : null
+    : typedAs && lacking ? { student: typedAs.student, name: typedAs.name, page: otherSheet } : null
+  const waitingWhy = guess ? null
+    : resolved.kind === 'empty' ? 'Type a name or a student code for someone else, or pick a guess.'
+    : resolved.kind === 'searching' || (typedAs && !lacking) ? 'Still looking that name up.'
+    : resolved.kind === 'several' ? 'Several students match; choose one.'
+    : resolved.kind === 'none' ? `No student called ${resolved.query}.`
+    : null
 
   async function fileIt() {
     if (busy) return
-    if (!target) return setErr('Type a name or a student code for someone else, or pick a guess.')
+    if (!target) return setErr(waitingWhy ?? 'Pick a guess first.')
     setBusy(true); setErr(null)
     try {
       await post(`/api/piles/${pile.id}/sheets/${h.sheet}/file`, { student: target.student, page: target.page })
@@ -176,7 +183,8 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
         if (e.key === 'Escape') t.blur()
         return
       }
-      if (t && t.tagName === 'BUTTON' && e.key === 'Enter') return
+      // Enter on a student in the Which one? list chooses that student; anywhere else it files
+      if (e.key === 'Enter' && t?.dataset.choose) return
       if (e.key === 'j' || e.key === 'J') setIdx((i) => Math.min(i + 1, held.length - 1))
       else if (e.key === 'k' || e.key === 'K') setIdx((i) => Math.max(i - 1, 0))
       else if (/^[1-3]$/.test(e.key) && Number(e.key) <= otherN) {
@@ -196,7 +204,7 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
     <div className="col" style={{ gap: 4 }}>
       <span className="over quiet" style={{ fontSize: 10 }}>{label}</span>
       {p ? (
-        <button type="button" className="scanlink" onClick={() => openViewer(views, at)} title="Open large. Wheel to zoom, drag to move, Esc to close.">
+        <button type="button" className="scanlink" onClick={(e) => { e.currentTarget.blur(); openViewer(views, at) }} title="Open large. Wheel to zoom, drag to move, Esc to close.">
           <img className="scan" src={fileUrl(p.filePath)} alt={`Sheet ${h.sheet}, ${label}`} style={{ transform: `rotate(${rotate}deg)` }} />
         </button>
       ) : <div className="notice">No page here.</div>}
@@ -228,7 +236,7 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
             <p style={{ margin: 0 }}><b>Why:</b> {h.why}</p>
             <div className="col" style={{ gap: 8 }}>
               {guesses.map((g, i) => (
-                <button key={`${g.student}-${g.page}`} type="button" className={`guess ${pick === i + 1 ? 'on' : ''}`} onClick={() => setPick(i + 1)}>
+                <button key={`${g.student}-${g.page}`} type="button" className={`guess ${pick === i + 1 ? 'on' : ''}`} onClick={(e) => { e.currentTarget.blur(); setPick(i + 1) }}>
                   <span className="n">{i + 1}</span>
                   <span className="col" style={{ gap: 2 }}>
                     <span style={{ fontWeight: 600 }}>{g.studentName} · sheet {g.page}</span>
@@ -242,22 +250,22 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
                   <span style={{ fontWeight: 600 }}>{typedAs ? typedAs.name : 'Someone else'}</span>
                   <span className="row" style={{ gap: 8 }}>
                     <label className="vh" htmlFor="pc-typed">Name or student code</label>
-                    <input id="pc-typed" ref={typedRef} type="text" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Name or code" autoComplete="off" style={{ flex: 1, minWidth: 120 }} />
+                    <input id="pc-typed" ref={typedRef} type="text" value={typed} onChange={(e) => onType(e.target.value)} placeholder="Name or code" autoComplete="off" style={{ flex: 1, minWidth: 120 }} />
                     <label className="row" style={{ gap: 4 }}>
                       <span className="muted small">sheet</span>
-                      <select value={otherSheet} onChange={(e) => { setSheetPick(Number(e.target.value)); setPick(otherN) }}>
+                      <select value={otherSheet} disabled={!lacking} onChange={(e) => { if (typedAs) setSheetPick({ student: typedAs.student, n: Number(e.target.value) }); setPick(otherN) }}>
                         {Array.from({ length: Math.max(1, a.sheets) }, (_, i) => i + 1).map((n) => (
-                          <option key={n} value={n}>{n}{typedAs && !lacking.includes(n) ? ' · already in' : ''}</option>
+                          <option key={n} value={n}>{n}{lacking && !lacking.includes(n) ? ' · already in' : ''}</option>
                         ))}
                       </select>
                     </label>
                   </span>
-                  {typed.trim() && !typedAs && (
-                    <span className="muted small">{matches.length > 1 ? 'Which one?' : query ? `No student called ${query}.` : 'A name or a student code, like S07.'}</span>
-                  )}
-                  {matches.length > 1 && !typedAs && (
+                  {resolved.kind === 'searching' && <span className="muted small">Looking up {query || 'that name'}.</span>}
+                  {resolved.kind === 'none' && <span className="muted small">{query ? `No student called ${query}.` : 'A name or a student code, like S07.'}</span>}
+                  {resolved.kind === 'several' && (
                     <span className="col" style={{ gap: 2 }}>
-                      {matches.map((m) => <button key={m.code} type="button" className="tab" style={{ textAlign: 'left', padding: '4px 6px' }} onClick={() => { setTyped(m.code); setMatches([m]) }}>{m.name} · {m.code} · {m.klass}</button>)}
+                      <span className="muted small">Which one?</span>
+                      {resolved.list.map((m) => <button key={m.code} type="button" data-choose="1" className="tab" style={{ textAlign: 'left', padding: '4px 6px' }} onClick={() => { setTyped(m.code); setSearch({ q: m.code, list: [m] }); typedRef.current?.focus() }}>{m.name} · {m.code} · {m.klass}</button>)}
                     </span>
                   )}
                 </span>
@@ -265,10 +273,10 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
             </div>
             {err && <p className="err" style={{ margin: 0 }}>{err}</p>}
             <div className="row" style={{ gap: 10 }}>
-              <button type="button" className="btn primary" disabled={busy} onClick={() => void fileIt()}>
+              <button type="button" className="btn primary" disabled={busy || !target} title={target ? undefined : (waitingWhy ?? undefined)} onClick={(e) => { e.currentTarget.blur(); void fileIt() }}>
                 {target ? `File as ${target.name} · sheet ${target.page}` : 'File'} <span style={{ opacity: 0.7, marginLeft: 6 }}>Enter</span>
               </button>
-              <button type="button" className="btn" disabled={busy} onClick={() => void leaveLoose()}>
+              <button type="button" className="btn" disabled={busy} onClick={(e) => { e.currentTarget.blur(); void leaveLoose() }}>
                 Leave it loose <span style={{ opacity: 0.7, marginLeft: 6 }}>X</span>
               </button>
             </div>
@@ -281,7 +289,7 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
 
 // ---------- a pile with no codes: packets, filed all at once ----------
 
-function Packets({ data, assignment: a, onFiled }: { data: PileData; assignment: Assignment; onFiled: (c: Checked[]) => void }) {
+function Packets({ data, assignment: a, onFiled }: { data: PileData; assignment: Assignment; onFiled: (c: Checked[], problem?: string | null) => void }) {
   const { pile, sheets, roster } = data
   const given = data.packets ?? []
   // the held sheets in pile order; packets are cut over their positions
@@ -291,6 +299,8 @@ function Packets({ data, assignment: a, onFiled }: { data: PileData; assignment:
   const [edited, setSizes] = useState<number[] | null>(null)
   const sizes = edited ?? given.map((p) => p.sheets.length)
   const [picks, setPicks] = useState<Record<number, string>>({})
+  // what is being typed in a packet's sheet count, kept until Enter or leaving the box
+  const [drafts, setDrafts] = useState<Record<number, string>>({})
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const { open: openViewer } = useViewer()
@@ -302,12 +312,18 @@ function Packets({ data, assignment: a, onFiled }: { data: PileData; assignment:
   packets.forEach((_, k) => { const c = pickFor(k); if (c) used.set(c, (used.get(c) ?? 0) + 1) })
   const dupes = [...used.entries()].filter(([, n]) => n > 1).map(([c]) => nameOf(c))
   const unnamed = packets.filter((_, k) => !pickFor(k)).length
-  const ready = packets.length > 0 && unnamed === 0 && dupes.length === 0 && !busy
+  const oversized = packets.map((pk, k) => (pk.length > perStudent ? k + 1 : 0)).filter(Boolean)
+  const ready = packets.length > 0 && unnamed === 0 && dupes.length === 0 && oversized.length === 0 && !busy
 
-  function resize(k: number, n: number) {
+  function commitSize(k: number) {
+    const text = drafts[k]
+    if (text == null) return
+    const n = packetSize(text, perStudent)
+    setDrafts({})
+    if (n == null) return
     const next = [...sizes]
     for (let j = 0; j < k; j++) if (next[j] == null) next[j] = perStudent
-    next[k] = Math.max(1, n || 1)
+    next[k] = n
     setSizes(next)
   }
   async function fileAll() {
@@ -317,9 +333,10 @@ function Packets({ data, assignment: a, onFiled }: { data: PileData; assignment:
       const body = packets.map((pk, k) => ({ sheets: pk, student: pickFor(k) }))
       const r = await post<{ filed: number; failed: Array<{ sheet: number; error: string }> }>(`/api/piles/${pile.id}/file-all`, { packets: body })
       const failed = new Set(r.failed.map((f) => f.sheet))
-      if (r.failed.length) setErr(`${r.failed.length} sheet${r.failed.length === 1 ? '' : 's'} could not be filed: ${r.failed[0].error}`)
-      onFiled(body.flatMap((p) => p.sheets.filter((s) => !failed.has(s)).map((s, i) => ({ sheet: s, to: `${nameOf(p.student)}, sheet ${i + 1}` }))))
-      setSizes(null); setPicks({})
+      const problem = r.failed.length ? `${r.failed.length} sheet${r.failed.length === 1 ? '' : 's'} could not be filed: ${r.failed[0].error}` : null
+      // the note lives on the page, since this list goes once sheets have filed
+      onFiled(body.flatMap((p) => p.sheets.map((s, i) => ({ sheet: s, to: `${nameOf(p.student)}, sheet ${i + 1}` })).filter((c) => !failed.has(c.sheet))), problem)
+      setSizes(null); setPicks({}); setDrafts({})
     } catch (e) {
       setErr((e as Error).message)
     } finally {
@@ -346,7 +363,7 @@ function Packets({ data, assignment: a, onFiled }: { data: PileData; assignment:
                 const f = sheets[n - 1]?.front
                 const at = views.findIndex((v) => v.pageId === f?.id)
                 return (
-                  <button key={n} type="button" className="thumb" title="Open large, front and back" onClick={() => openViewer(views, Math.max(0, at))} style={{ width: 96, background: 'none', border: 0, padding: 0, cursor: 'pointer', font: 'inherit' }}>
+                  <button key={n} type="button" className="thumb" title="Open large, front and back" onClick={(e) => { e.currentTarget.blur(); openViewer(views, Math.max(0, at)) }} style={{ width: 96, background: 'none', border: 0, padding: 0, cursor: 'pointer', font: 'inherit' }}>
                     {f ? <img src={fileUrl(f.thumbPath ?? f.filePath)} alt={`Sheet ${n}, front`} /> : <span className="notice">No page</span>}
                     <span>sheet {n}</span>
                   </button>
@@ -361,12 +378,13 @@ function Packets({ data, assignment: a, onFiled }: { data: PileData; assignment:
                 </select>
               </label>
               <label className="row"><span className="over quiet" style={{ fontSize: 10 }}>Sheets</span>
-                <input type="number" min={1} max={20} value={sizes[k] ?? perStudent} onChange={(e) => resize(k, Number(e.target.value))} style={{ width: 64 }} />
+                <input type="number" min={1} max={perStudent} value={drafts[k] ?? String(sizes[k] ?? perStudent)} onChange={(e) => setDrafts({ [k]: e.target.value })} onBlur={() => commitSize(k)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitSize(k) } }} style={{ width: 64 }} />
               </label>
             </div>
           </div>
         )
       })}
+      {oversized.length > 0 && <p className="err" style={{ margin: 0 }}>Packet{oversized.length === 1 ? '' : 's'} {oversized.join(', ')} {oversized.length === 1 ? 'has' : 'have'} more sheets than {a.code} has ({perStudent}); make {oversized.length === 1 ? 'it' : 'them'} smaller.</p>}
       {dupes.length > 0 && <p className="err" style={{ margin: 0 }}>{dupes.join(', ')} chosen more than once.</p>}
       {unnamed > 0 && <p className="muted small" style={{ margin: 0 }}>{unnamed} packet{unnamed === 1 ? '' : 's'} still without a student.</p>}
       {err && <p className="err" style={{ margin: 0 }}>{err}</p>}
