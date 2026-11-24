@@ -65,6 +65,8 @@ unnecessary:
 - `data/originals/<name>.pdf` and `pages.origin` / `pages.originPage` already
   exist (every rendered page knows its PDF and page number).
 - A rescan already replaces the earlier scan of a side and carries comments.
+  One change to it here: the replaced file is kept beside the new one
+  (`2b.r<pageId>.jpg`) instead of being written over, so a pile can be undone.
 - Windows start/update scripts are unchanged.
 
 ## Approaches considered
@@ -111,10 +113,14 @@ codes; `server/piles.ts`, fully unit-tested):
    If no code read, the pile is `new` with no assignment and waits for the
    teacher to name it on the Scan screen (§3); nothing files until then.
    Pages whose code names a different assignment than the pile's are held.
-2. *Fronts and backs.* If the assignment is two-sided and the page count is
-   even, pages 1..N are fronts in pile order and pages N+1..2N are backs in
-   reverse: sheet k is pages k and 2N+1−k. If the assignment is single-sided,
-   every page is a front and a sheet. If the assignment is two-sided and the
+2. *Fronts and backs.* "Two-sided" here means the assignment waits for at
+   least one back (`sidesFor(a)` has a `b` side): an assignment whose backs
+   all stay with the student (`expect = 1a,2a`) is fed fronts only and is
+   single-sided for pairing. If the assignment is two-sided and the page
+   count is even, pages 1..N are fronts in pile order and pages N+1..2N are
+   backs in reverse: sheet k is pages k and 2N+1−k. If the assignment is
+   single-sided, every page is a front and a sheet; a page whose code reads
+   as a back is filed as that side, kept and not counted, as today. If the assignment is two-sided and the
    count is odd, or the mirror check below fails for three or more sheets in a
    row, the pile is `jumbled`: nothing is filed by position, every page with a
    clean, non-contradicted code is filed on its own as today, and the rest go
@@ -131,6 +137,10 @@ codes; `server/piles.ts`, fully unit-tested):
    - A read code with a side letter that disagrees with the sheet's position
      (an `a` code on a back page) counts as a disagreement with position:
      held, not filed.
+   - A side the sheet implies but the assignment never printed (the blank
+     back of a packet with an odd `sides` count) is marked `not_work`, not
+     filed. A side that was printed but is not waited for (`expect`: a
+     reading page) is filed and not counted, as today.
 4. *Owners by position.* Walk the sheets in front order. Known sheets form
    runs by student. An unknown sheet between two known sheets of the same
    student, or at the start or end of a run that is still missing sheet
@@ -159,9 +169,22 @@ alone. The pile settles when the last rendered page of that PDF has been
 decoded. Pages a PDF left in the inbox before a restart are matched to their
 pile by name (`stem__pNN.jpg`) as they are to their origin today.
 
-**Re-settling.** A pile can be settled again from the Scan screen ("Undo this
-pile"): every page it filed goes back to `review`, and it is settled afresh.
-Used when the teacher named the wrong assignment or wants to start over.
+**Undo.** "Undo this pile" on the Scan screen takes back everything the pile
+filed, by position, by code, and by hand from its check screen: those pages
+return to the pile as unsettled; pages the teacher sent loose stay loose. A
+scan the pile had replaced is restored from its kept file and its record goes
+back to `filed`. A packet the undo empties keeps its row when it carries a
+score, note, feedback or analysis (the packet count goes to 0), and is deleted
+only when it carries nothing. The pile is then `new` again, to be settled
+afresh (with another assignment, usually).
+
+**Packets missing a side.** The two-hour "incomplete" rule and its review
+items go. A packet that is still short a side simply shows as such on the
+Assignments hub ("16 of 18 in · 2 missing a side") and on the assignment
+page. The hub's one action moves the assignment on regardless: **Analyse 16**
+asks once, "2 packets are missing a side. Analyse them as they are?", and
+closes those packets as incomplete when the teacher says yes. Nothing waits
+two hours for anyone any more.
 
 ### 2. Navigation
 
@@ -265,8 +288,9 @@ WORTH NOTICING
 W22: three students wrote "did you became" …                     (from the class analysis)
 ```
 
-- Stage, in order: **Scanning** (pages still arriving, or piles to check),
-  **Ready to analyse** (every packet complete or closed, none analysed),
+- Stage, in order: **Scanning** (a pile for it is still arriving or has
+  sheets to check), **Ready to analyse** (no pile open for it; packets may
+  still be short a side, which the row says),
   **Analysing** (jobs running), **Analysed** (analysed, feedback not yet
   printed), **Done** (feedback printed; `packets.feedbackPrintedAt`, set when
   the feedback print route is opened for that assignment). Without an API
@@ -325,6 +349,9 @@ how Claude's ratings compare, what gets sent.
   `stage` and `nextAction` per row.
 - Kept: everything under `/api/review` for loose pages (renamed in the UI
   only), `/api/review/batch`, the packet and page routes, every analysis route.
+  `POST /api/review/packets/close-all` and the per-packet close stay as the
+  routes the hub's "analyse them as they are" uses; the stale-packet review
+  items and `stalePackets()` go.
 - Removed: `/api/review/setup-assignment` (a pile with codes for an unknown
   assignment is settled the moment the assignment is created; the Scan
   screen's "Which assignment is this?" offers "New assignment from these
@@ -333,7 +360,8 @@ how Claude's ratings compare, what gets sent.
 ## Migration
 
 - Existing pages have no pile; they stay as they are. Pages currently in
-  review become loose pages. Nothing is re-filed.
+  review become loose pages. Nothing is re-filed. Packets already closed as
+  incomplete stay closed.
 - Old routes redirect.
 - README: the "How a page is filed" section is rewritten around piles; the
   Review paragraphs go; the Windows section is unchanged.
