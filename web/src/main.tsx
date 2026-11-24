@@ -1,17 +1,15 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { createBrowserRouter, RouterProvider } from 'react-router-dom'
+import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'
 import './styles.css'
 import Shell from './components/Shell'
-import Today from './pages/Today'
+import Scan, { NotYet } from './pages/Scan'
+import ScanLog from './pages/ScanLog'
 import Students from './pages/Students'
 import StudentPage from './pages/Student'
 import Assignments from './pages/Assignments'
 import AssignmentPage from './pages/Assignment'
 import Compare from './pages/Compare'
-import Review from './pages/Review'
-import Stack from './pages/Stack'
-import Sort from './pages/Sort'
 import SettingsPage from './pages/Settings'
 
 const router = createBrowserRouter([
@@ -19,15 +17,20 @@ const router = createBrowserRouter([
     path: '/',
     element: <Shell />,
     children: [
-      { index: true, element: <Today /> },
+      { index: true, element: <Scan /> },
+      { path: 'scan', element: <Scan /> },
+      { path: 'scan/log', element: <ScanLog /> },
+      { path: 'scan/pile/:id', element: <NotYet /> },
+      { path: 'scan/loose', element: <NotYet /> },
+      { path: 'today', element: <Navigate to="/scan" replace /> },
       { path: 'students', element: <Students /> },
       { path: 'students/:code', element: <StudentPage /> },
       { path: 'assignments', element: <Assignments /> },
       { path: 'assignments/:code', element: <AssignmentPage /> },
       { path: 'compare', element: <Compare /> },
-      { path: 'review', element: <Review /> },
-      { path: 'review/stack', element: <Stack /> },
-      { path: 'review/sort', element: <Sort /> },
+      { path: 'review', element: <Navigate to="/scan" replace /> },
+      { path: 'review/stack', element: <Navigate to="/scan" replace /> },
+      { path: 'review/sort', element: <Navigate to="/scan/loose" replace /> },
       { path: 'settings', element: <SettingsPage /> },
     ],
   },
