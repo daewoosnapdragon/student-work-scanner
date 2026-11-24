@@ -58,4 +58,15 @@ describe('scanning a filed side again', () => {
     expect(fs.existsSync(path.join(tmp, again.filePath))).toBe(true)
     expect(db.packetPages('S07', 'W22')).toHaveLength(1)
   })
+  it('keeps the replaced file beside the new one, and can restore it', async () => {
+    const first = await pipeline.processImage(await codedPage('d.jpg', 'SWS1:S07:W22:1A', '#ffffff'), 'd.jpg')
+    const again = await pipeline.processImage(await codedPage('e.jpg', 'SWS1:S07:W22:1A', '#dddddd'), 'e.jpg')
+    const old = db.getPage(first.id)!
+    expect(old.filePath).toBe(pipeline.rel(pipeline.replacedPath(path.join(tmp, again.filePath), first.id)))
+    expect(fs.existsSync(path.join(tmp, old.filePath))).toBe(true)
+    const restored = pipeline.restoreReplaced(first.id)
+    expect(restored).toMatchObject({ id: first.id, status: 'filed', filePath: again.filePath })
+    expect(db.getPage(again.id)!.status).toBe('review')
+    expect(db.packetPages('S07', 'W22').map((p) => p.id)).toEqual([first.id])
+  })
 })

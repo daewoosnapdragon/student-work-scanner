@@ -134,6 +134,7 @@ export async function processImage(file: string, sourceName: string, from: Origi
     const dup = duplicateOf(ref)
     const dest = archivePath(ref, sourceName)
     fs.mkdirSync(path.dirname(dest), { recursive: true })
+    if (dup) keepReplaced(dup, dest)
     fs.renameSync(file, dest)
     const p = insertPage({
       status: 'filed', student: ref.student, assignment: ref.assignment, page: ref.page, side: ref.side, scannedAt: at, seq,
@@ -168,13 +169,51 @@ function placementProblem(ref: PageRef): string | null {
   return null
 }
 
-// The earlier scan of a side steps aside for the new one. Its file has just
-// been written over (same archive path), so only the record and the comments
-// change hands.
+/** Where a replaced scan's file is kept: beside the live one, '…/2b.jpg' → '…/2b.r12.jpg'. */
+export function replacedPath(archivePath: string, oldPageId: number): string {
+  const ext = path.extname(archivePath)
+  return `${archivePath.slice(0, archivePath.length - ext.length)}.r${oldPageId}${ext}`
+}
+
+// Before a new scan takes the archive path, the old file moves aside and its record follows it.
+function keepReplaced(old: Page, dest: string) {
+  if (!fs.existsSync(dest)) return
+  const kept = replacedPath(dest, old.id)
+  fs.renameSync(dest, kept)
+  updatePage(old.id, { filePath: rel(kept) })
+}
+
+// The earlier scan of a side steps aside for the new one. Its file was kept
+// beside the archive path, so only the record and the comments change hands.
 function replaceScan(old: Page, by: Page) {
   updatePage(old.id, { status: 'replaced', reason: `replaced by rescan, page ${by.id}` })
   moveAnnotations(old.id, by.id)
   console.log(`[rescan] ${old.student} ${old.assignment} ${shortSide(old.page!, old.side!)}: ${old.sourceName} replaced by ${by.sourceName}`)
+}
+
+/** Undo a rescan: the old scan goes back on file, and the scan that replaced it returns to review. */
+export function restoreReplaced(oldPageId: number): Page {
+  const old = getPage(oldPageId)
+  if (!old) throw new Error('page not found')
+  if (old.status !== 'replaced') throw new Error('page is not a replaced scan')
+  const m = /page (\d+)$/.exec(old.reason ?? '')
+  const by = m ? getPage(Number(m[1])) : undefined
+  if (!by) throw new Error('the scan that replaced this one is gone')
+  const kept = abs(old.filePath)
+  if (!fs.existsSync(kept)) throw new Error('the replaced scan\'s file is gone')
+  const live = abs(by.filePath)
+  const archive = path.join(path.dirname(kept), path.basename(kept).replace(/\.r\d+(\.[^.]+)$/, '$1'))
+  if (fs.existsSync(live)) {
+    const aside = path.join(HOLDING_DIR, `${by.seq}-${by.sourceName}`)
+    fs.renameSync(live, aside)
+    updatePage(by.id, { filePath: rel(aside) })
+  }
+  updatePage(by.id, { status: 'review', reason: 'undone', filedFrom: null })
+  moveAnnotations(by.id, old.id)
+  fs.renameSync(kept, archive)
+  updatePage(old.id, { status: 'filed', filePath: rel(archive), reason: null })
+  if (old.student && old.assignment) refreshPacket(old.student, old.assignment, old.scannedAt)
+  return getPage(old.id)!
 }
 
 // Review decisions -----------------------------------------------------------
@@ -191,6 +230,7 @@ export function fileFromReview(pageId: number, ref: PageRef, allowDuplicate = fa
   const from = abs(p.filePath)
   const dest = archivePath(ref, p.sourceName)
   fs.mkdirSync(path.dirname(dest), { recursive: true })
+  if (dup) keepReplaced(dup, dest)
   fs.renameSync(from, dest)
   updatePage(pageId, {
     status: 'filed', student: ref.student, assignment: ref.assignment, page: ref.page, side: ref.side, filePath: rel(dest), reason: null, filedFrom: 'review',
