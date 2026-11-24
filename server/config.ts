@@ -12,8 +12,6 @@ export const ORIGINALS_DIR = path.join(DATA_DIR, 'originals') // the PDFs the sc
 export const THUMBS_DIR = path.join(DATA_DIR, 'thumbs')
 export const DB_PATH = path.join(DATA_DIR, 'scanner.sqlite')
 export const PORT = Number(process.env.PORT ?? 4710)
-// A packet that is still missing sides this long after its last page goes to review.
-export const INCOMPLETE_AFTER_MIN = Number(process.env.SWS_INCOMPLETE_AFTER_MIN ?? 120)
 export const PDF_DPI = Number(process.env.SWS_PDF_DPI ?? 200)
 
 export function ensureDirs() {

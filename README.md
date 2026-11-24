@@ -37,7 +37,7 @@ For a taskbar icon, double-click `windows\Make Shortcut.cmd` once. It puts a Stu
 
 If `npm` refuses to run with a message about scripts being disabled, run this once in PowerShell: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
-Other settings: `SWS_DATA_DIR` (where the archive, kept PDFs, thumbnails and database live; default `data/`), `PORT` (default 4710), `SWS_INCOMPLETE_AFTER_MIN` (a packet still missing sides this long after its last page goes to review; default 120), `SWS_PDF_DPI` (default 200).
+Other settings: `SWS_DATA_DIR` (where the archive, kept PDFs, thumbnails and database live; default `data/`), `PORT` (default 4710), `SWS_PDF_DPI` (default 200).
 
 ## Trying it without a scanner
 

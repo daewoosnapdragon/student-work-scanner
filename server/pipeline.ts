@@ -2,9 +2,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import sharp from 'sharp'
 import * as mupdf from 'mupdf'
-import { ARCHIVE_DIR, DATA_DIR, HOLDING_DIR, INBOX_DIR, INCOMPLETE_AFTER_MIN, ORIGINALS_DIR, PDF_DPI, THUMBS_DIR } from './config.js'
+import { ARCHIVE_DIR, DATA_DIR, HOLDING_DIR, INBOX_DIR, ORIGINALS_DIR, PDF_DPI, THUMBS_DIR } from './config.js'
 import { decodePage, makeThumb } from './decode.js'
-import { closePacketIncomplete, emptyOrDeletePacket, getAssignment, getPile, getPileByOrigin, getStudent, insertPage, insertPile, upsertAssignment, moveAnnotations, nextSeq, openPackets, packetPages, pilePages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
+import { emptyOrDeletePacket, getAssignment, getPile, getPileByOrigin, getStudent, insertPage, insertPile, upsertAssignment, moveAnnotations, nextSeq, packetPages, pilePages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
 import { broadcast } from './events.js'
 import type { Assignment, Packet, Page, PageRef, Pile, Side } from '../shared/types.js'
 import { shortSide } from './codes.js'
@@ -318,15 +318,7 @@ export function setupAssignmentFromReview(code: string, given: { title?: string 
   code = code.toUpperCase()
   const pages = reviewPages().filter((p) => p.assignment === code && p.student && p.page && p.side).sort((a, b) => a.seq - b.seq)
   if (!pages.length) throw new Error(`no pages waiting for ${code}`)
-  if (!getAssignment(code)) {
-    const students = pages.map((p) => getStudent(p.student!)).filter((s): s is NonNullable<typeof s> => !!s)
-    const klass = given.klass?.trim() || mostCommon(students.map((s) => s.klass)) || 'Class'
-    const grade = given.grade ?? mostCommon(students.map((s) => s.grade).filter((g): g is number => g != null)) ?? null
-    upsertAssignment({
-      code, title: given.title?.trim() || code, klass, grade, assignedOn: new Date().toISOString().slice(0, 10),
-      sheets: Math.max(1, ...pages.map((p) => p.page!)), twoSided: pages.some((p) => p.side === 'b') ? 1 : 0, tags: '', notes: null,
-    })
-  }
+  if (!getAssignment(code)) assignmentFromCodes(code, pages, given)
   let filed = 0
   const failed: Array<{ pageId: number; error: string }> = []
   for (const p of pages) {
@@ -338,6 +330,28 @@ export function setupAssignmentFromReview(code: string, given: { title?: string 
     }
   }
   return { assignment: getAssignment(code)!, filed, failed }
+}
+/**
+ * Makes an assignment that codes name but nobody set up, from what the codes say: the class and grade
+ * most of their students are in, as many sheets as the highest sheet read, and backs when any back read.
+ * What the caller gives wins over what the codes suggest.
+ */
+export function assignmentFromCodes(
+  code: string,
+  codes: Array<{ student: string | null; page: number | null; side: Side | null }>,
+  given: { title?: string | null; klass?: string | null; grade?: number | null; sheets?: number | null; twoSided?: boolean | null },
+): Assignment {
+  code = code.toUpperCase()
+  const students = codes.map((p) => (p.student ? getStudent(p.student) : undefined)).filter((s): s is NonNullable<typeof s> => !!s)
+  const klass = given.klass?.trim() || mostCommon(students.map((s) => s.klass)) || 'Class'
+  const grade = given.grade ?? mostCommon(students.map((s) => s.grade).filter((g): g is number => g != null)) ?? null
+  const sheets = given.sheets != null && given.sheets >= 1 ? Math.floor(given.sheets) : Math.max(1, ...codes.map((p) => p.page ?? 1))
+  const twoSided = given.twoSided != null ? given.twoSided : codes.some((p) => p.side === 'b')
+  upsertAssignment({
+    code, title: given.title?.trim() || code, klass, grade, assignedOn: new Date().toISOString().slice(0, 10),
+    sheets, twoSided: twoSided ? 1 : 0, tags: '', notes: null,
+  })
+  return getAssignment(code)!
 }
 function mostCommon<T>(xs: T[]): T | undefined {
   const n = new Map<T, number>()
@@ -406,25 +420,6 @@ export function skipAllInReview(notWork = false): number {
   for (const p of pages) updatePage(p.id, { status: notWork ? 'not_work' : 'skipped' })
   if (pages.length) broadcast('review', { skippedAll: pages.length })
   return pages.length
-}
-
-// Packets that stopped arriving --------------------------------------------
-
-// Only once a side that was waited for has arrived: a packet holding nothing
-// but pages that stay with the student has not started.
-export function stalePackets(now = Date.now()) {
-  const cutoff = now - INCOMPLETE_AFTER_MIN * 60_000
-  return openPackets().filter((p) => p.sides > 0 && Date.parse(p.lastAt) < cutoff)
-}
-
-// Every packet that stopped arriving is filed as it is, in one go: the sides
-// that came stay filed, a side that turns up later still joins, and nothing
-// waits in review for it any more.
-export function closeStalePackets(now = Date.now()): number {
-  const stale = stalePackets(now)
-  for (const p of stale) closePacketIncomplete(p.student, p.assignment)
-  if (stale.length) broadcast('review', { closedPackets: stale.length })
-  return stale.length
 }
 
 function duplicateOf(ref: PageRef): Page | undefined {
