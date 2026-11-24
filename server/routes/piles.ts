@@ -6,7 +6,7 @@ import { getAssignment, getPage, getPile, getStudent, listPiles, listStudents, p
 import { assignmentFromCodes, pileArriving } from '../pipeline.js'
 import { fileAllPackets, fileSheet, looseSheet, namePile, settle, undoPile } from '../pileFiling.js'
 import { pairSheets } from '../piles.js'
-import type { Assignment, HeldSheet, Page, Pile, Student } from '../../shared/types.js'
+import type { Assignment, HeldSheet, Page, Pile, PileData, SheetRow, SheetStatus, Student } from '../../shared/types.js'
 
 export const piles = Router()
 
@@ -15,8 +15,6 @@ export function openPilesFor(code: string, from: Pile[] = listPiles(500)): Pile[
   return from.filter((p) => p.assignment === code && (p.status === 'new' || p.status === 'checking'))
 }
 
-type SheetStatus = 'filed' | 'held' | 'loose' | 'not_work' | 'missing'
-interface SheetRow { sheet: number; front: Page | null; back: Page | null; status: SheetStatus; student: string | null; studentName: string | null }
 
 /**
  * Every sheet of a pile as the PDF's page count pairs them, with the pages at its two places and where
@@ -57,7 +55,7 @@ export function rosterFor(a: Assignment): Student[] {
 }
 
 /** A pile for the check screen: its sheets, the held ones with their pages, and in the no-codes case the packets. */
-function pileDetail(pile: Pile) {
+function pileDetail(pile: Pile): PileData {
   const a = pile.assignment ? (getAssignment(pile.assignment) ?? null) : null
   const sheets = pileSheets(pile)
   const page = (id: number | null) => (id == null ? null : (getPage(id) ?? null))

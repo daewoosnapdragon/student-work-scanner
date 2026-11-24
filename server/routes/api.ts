@@ -6,12 +6,13 @@ import {
   expectedFor, findStudentsByName, getAssignment, getPacket, getStudent, listAssignments, listStudents,
   packetPages, packetsForAssignment, packetsForStudent, pagesForStudent, pagesSince, recentPages, reviewPages,
   setPacketScore, upsertAssignment, upsertStudent, closePacketIncomplete, getPage, getMeta, sidesFor, printedSidesFor, deleteAssignment,
-  refreshPacketsFor, setAssignmentAnalysis, setPacketFeedback, listPiles, markFeedbackPrinted, openPackets,
+  refreshPacketsFor, setAssignmentAnalysis, setPacketFeedback, listPiles, markFeedbackPrinted, openPackets, pagesOfPileOrOrigin,
 } from '../db.js'
 import { broadcast, subscribe } from '../events.js'
 import { guessesFor } from '../guesses.js'
 import { abs, fileFromReview, reorderPacket, skipAllInReview, skipFromReview, unfilePage } from '../pipeline.js'
 import { openPilesFor, piles as pileRoutes, pileSheets, rosterFor } from './piles.js'
+import { pileAssignment } from '../piles.js'
 import { buildPdf } from '../pdf.js'
 import { classPrompt, splitClassAnswer, splitStudentSection } from '../analysis.js'
 import { enqueueAssignment, enqueueClass, enqueuePacket, getSettings, queueStatus, saveSettings, testKey, domainList, domainsFor, LEVELS, anchorsFor } from '../claude.js'
@@ -43,12 +44,16 @@ api.get('/scan', (_req, res) => {
   const w = watcherStatus()
   const piles = listPiles().map((pile) => {
     const sheets = pileSheets(pile)
+    const rows = pagesOfPileOrOrigin(pile.id, pile.origin)
     return {
       ...pile,
       assignmentTitle: pile.assignment ? (getAssignment(pile.assignment)?.title ?? null) : null,
+      // the assignment the codes that read name, even before it exists: what "New assignment from these codes" offers
+      codeAssignment: pileAssignment(rows.filter((p) => p.pile === pile.id).map((p) => ({ id: p.id, index: p.pileIndex ?? 0, ref: p.student && p.assignment && p.page && p.side ? { student: p.student, assignment: p.assignment, page: p.page, side: p.side } : null }))),
       filed: sheets.filter((x) => x.status === 'filed').length,
       toCheck: pile.held.length,
-      looseFrom: sheets.filter((x) => x.status === 'loose' || x.status === 'not_work').length,
+      // pages, not sheets: a jumbled pile sends pages loose one by one
+      looseFrom: rows.filter((p) => p.status === 'review' && p.pile !== pile.id).length,
     }
   })
   res.json({
@@ -153,7 +158,8 @@ api.get('/assignments', (_req, res) => {
 type Stage = 'scanning' | 'ready' | 'analysing' | 'analysed' | 'done'
 /** Where an assignment is: a pile for it still open, analysis running, analysed and not printed, printed, or ready to analyse. */
 function stageOf(packets: Packet[], scanning: boolean, analysing: boolean): Stage {
-  if (scanning) return 'scanning'
+  // nothing turned in yet: still being scanned, not ready to analyse
+  if (scanning || packets.length === 0) return 'scanning'
   if (analysing) return 'analysing'
   if (packets.length && packets.every((p) => p.analysedAt || p.note) && !packets.some((p) => p.feedbackPrintedAt)) return 'analysed'
   if (packets.length && packets.every((p) => p.feedbackPrintedAt)) return 'done'

@@ -23,7 +23,7 @@ export default function Assignments() {
 
   async function remove(a: Row) {
     if (a.turnedIn > 0) return setErr(`${a.code} has work from ${a.turnedIn} student${a.turnedIn === 1 ? '' : 's'} filed under it, so it stays.`)
-    if (!window.confirm(`Delete ${a.code} · ${a.title}? Nothing has been scanned for it. Labels already printed with this code would land in review.`)) return
+    if (!window.confirm(`Delete ${a.code} · ${a.title}? Nothing has been scanned for it. Pages printed with this code would then land in loose pages.`)) return
     try {
       setErr(null)
       await del(`/api/assignments/${a.code}`)

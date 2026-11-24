@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import { post, useFetch, fmtTime, type Assignment, type Pile } from '../api'
 import { folderName, pileAction, pileLine } from './scanCopy'
 
-interface PileRow extends Pile { assignmentTitle: string | null; filed: number; toCheck: number; looseFrom: number }
+/** A pile on the Scan screen. codeAssignment: the assignment its codes name, even one that does not exist yet. looseFrom: pages it sent to loose pages. */
+interface PileRow extends Pile { assignmentTitle: string | null; codeAssignment: string | null; filed: number; toCheck: number; looseFrom: number }
 interface ScanData {
   status: { inbox: string; originals?: string; folder?: string; queued: number; busy: boolean; lastSeen: string | null }
   piles: PileRow[]
@@ -114,11 +115,11 @@ function PileCard({ p, assignments, primary }: { p: PileRow; assignments: Assign
             <input id={`nt-${p.id}`} type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title" />
             <label className="vh" htmlFor={`nk-${p.id}`}>Class, if no page names one</label>
             <input id={`nk-${p.id}`} type="text" value={klass} onChange={(e) => setKlass(e.target.value)} placeholder="Class (optional)" style={{ width: 130 }} />
-            <button className="btn" disabled={!code.trim() || !title.trim() || busy}>Create and settle</button>
-            <button type="button" className="btn" onClick={() => setMaking(false)}>Cancel</button>
+            <button className={`btn${primary ? ' primary' : ''}`} disabled={!code.trim() || !title.trim() || busy}>Create and settle</button>
+            <button type="button" className="btn" onClick={() => { setCode(p.assignment ?? ''); setMaking(false) }}>Cancel</button>
           </form>
         ) : (
-          <div className="small"><a href="#new" onClick={(e) => { e.preventDefault(); setMaking(true) }}>New assignment from these codes</a></div>
+          <div className="small"><a href="#new" onClick={(e) => { e.preventDefault(); setCode(p.codeAssignment ?? ''); setMaking(true) }}>New assignment from these codes</a></div>
         )
       )}
       {err && <div className="err">{err}</div>}

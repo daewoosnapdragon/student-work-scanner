@@ -34,6 +34,10 @@ export default function AssignmentPage() {
   const { data: hub } = useFetch<HubRow[]>('/api/assignments', bump)
   const { data: queue } = useFetch<QueueStatus>('/api/analyse')
   const [analyseErr, setAnalyseErr] = useState<string | null>(null)
+  // ?prompt=1 (the hub's Copy prompt): once the page has loaded, bring the prompt panel into view
+  const wantPrompt = params.get('prompt') === '1'
+  const loaded = !!data
+  useEffect(() => { if (wantPrompt && loaded) document.getElementById('prompt')?.scrollIntoView({ block: 'start' }) }, [wantPrompt, loaded])
   if (error) return <main><p className="err">{error}</p></main>
   if (!data) return <main><p className="muted">Loading</p></main>
   const a = data.assignment
@@ -74,7 +78,7 @@ export default function AssignmentPage() {
   const toTop = () => window.scrollTo({ top: 0 })
   const toId = (id: string) => document.getElementById(id)?.scrollIntoView({ block: 'start' })
   async function remove() {
-    if (!window.confirm(`Delete ${a.code} · ${a.title}? Nothing has been scanned for it. Labels already printed with this code would land in review.`)) return
+    if (!window.confirm(`Delete ${a.code} · ${a.title}? Nothing has been scanned for it. Pages printed with this code would then land in loose pages.`)) return
     try {
       setAnalyseErr(null)
       await del(`/api/assignments/${a.code}`)
@@ -110,7 +114,7 @@ export default function AssignmentPage() {
               {inRows.length > 0 && <button type="button" onClick={() => { setPasting(true); setTimeout(() => toId('paste'), 0) }}>Paste class answer</button>}
               <button type="button" onClick={() => { setRubricOpen(true); setTimeout(() => toId('rubric'), 0) }}>Edit rubric</button>
               {inRows.length > 0 && data.rubric.scoring !== 'none' && <button type="button" onClick={() => toId('anchors')}>Scoring anchors</button>}
-              {inRows.length > 0 && <button type="button" onClick={() => toId('overview')}>Domains</button>}
+              <Link to="/settings#advanced" title="The domains are set in Settings, under Advanced">Domains</Link>
               <Link to={`/compare?assignment=${a.code}`}>Compare two students</Link>
               {data.analysisOn && analysed > 0 && active.length === 0 && <button type="button" onClick={() => { if (window.confirm(`Analyse all ${inRows.length} packets again? Existing analysis and feedback are replaced.`)) void analyseAll(true) }}>Analyse everything again</button>}
               {inRows.some((r) => r.packet!.feedback) && act?.kind !== 'print' && <a href={`/print/feedback/${a.code}`} target="_blank" rel="noreferrer">Feedback slips</a>}
@@ -218,7 +222,6 @@ export default function AssignmentPage() {
         <section id="overview" className="col sep" style={{ gap: 12 }}>
           <div className="between">
             <div><span className="serif" style={{ fontSize: 26, fontWeight: 700 }}>Overview</span> <span className="muted small" style={{ marginLeft: 8 }}>every student by domain, 1 to 4</span></div>
-            <div className="row"><a className="btn" href={`/print/overview/${a.code}`} target="_blank" rel="noreferrer">Print record</a><Link className="btn" to="/settings" title="The domains are set in Settings">Domains</Link></div>
           </div>
           <Overview rows={sorted} domains={data.domains} ratings={data.ratings} onPick={(code) => setOpen(code)} />
         </section>
@@ -278,7 +281,7 @@ function PacketPanel({ primary, s, a, onSaved, analysisOn, busyJob, domains, rat
     }
   }
   async function unfile(pg: Page) {
-    if (!window.confirm(`Send ${sideLabel(pg.page, pg.side)} back to Review? It leaves ${s.name}'s packet and can be filed under someone else there.`)) return
+    if (!window.confirm(`Send ${sideLabel(pg.page, pg.side)} to loose pages? It leaves ${s.name}'s packet and can be filed under someone else there.`)) return
     try {
       setErr(null)
       await post(`/api/pages/${pg.id}/unfile`, {})
@@ -327,7 +330,7 @@ function PacketPanel({ primary, s, a, onSaved, analysisOn, busyJob, domains, rat
               <span className="row" style={{ gap: 2 }}>
                 <button className="btn" style={{ padding: '1px 6px' }} disabled={i === 0 || moving} onClick={() => void move(i, -1)} title="Move this page earlier" aria-label="Move earlier">‹</button>
                 <button className="btn" style={{ padding: '1px 6px' }} disabled={i === pages.length - 1 || moving} onClick={() => void move(i, 1)} title="Move this page later" aria-label="Move later">›</button>
-                <button className="btn" style={{ padding: '1px 6px' }} onClick={() => void unfile(pg)} title="Not this student's page: send it back to Review" aria-label="Send back to review">×</button>
+                <button className="btn" style={{ padding: '1px 6px' }} onClick={() => void unfile(pg)} title="Not this student's page: send it to loose pages, to be filed under someone else" aria-label="Send to loose pages">×</button>
               </span>
             </span>
           </div>

@@ -12,7 +12,7 @@ export default function ScanLog() {
   return (
     <main>
       <section className="col" style={{ gap: 14 }}>
-        <div className="over"><Link to="/scan">Scan</Link> / Everything that arrived</div>
+        <div className="over"><Link to="/scan">Scan</Link> <span className="muted">/</span> Everything that arrived</div>
         <h1 className="serif title">Everything that arrived</h1>
         <p className="lede">Every page the scanner has taken in, newest first.</p>
         {error && <p className="err">{error}</p>}

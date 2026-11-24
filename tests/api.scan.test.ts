@@ -123,6 +123,12 @@ describe('scan and pile routes', () => {
     expect(db.getPacket('S02', 'W14')).toMatchObject({ sides: 4, complete: 1 })
   })
 
+  it('says scanning for an assignment with nothing turned in yet', async () => {
+    db.upsertAssignment({ code: 'W15', title: 'Week 15', klass: 'Daisy', grade: 3, assignedOn: null, sheets: 1, twoSided: 0, tags: '', notes: null })
+    const row = (await get('/api/assignments')).body.find((a: any) => a.code === 'W15')
+    expect(row).toMatchObject({ stage: 'scanning', turnedIn: 0, pileId: null })
+  })
+
   it('gives each assignment its stage, what is left to check and who is not in', async () => {
     const { body } = await get('/api/assignments')
     const row = body.find((a: any) => a.code === 'W14')
@@ -135,7 +141,7 @@ describe('scan and pile routes', () => {
     await processAll(await pilePdf('blank.pdf', new Array(4).fill(null)))
     const scan = (await get('/api/scan')).body
     const blank = scan.piles[0]
-    expect(blank).toMatchObject({ status: 'new', assignment: null, toCheck: 0 })
+    expect(blank).toMatchObject({ status: 'new', assignment: null, codeAssignment: null, toCheck: 0 })
     expect((await post(`/api/piles/${blank.id}/assignment`, { code: 'W99' })).status).toBe(400)
     const named = await post(`/api/piles/${blank.id}/assignment`, { code: 'W14' })
     expect(named.status).toBe(200)
@@ -153,7 +159,8 @@ describe('scan and pile routes', () => {
     expect(after.body.sheets.map((s: any) => s.status)).toEqual(['loose', 'loose'])
     const scan2 = (await get('/api/scan')).body
     expect(scan2.loose).toBe(4)
-    expect(scan2.piles[0]).toMatchObject({ id: blank.id, looseFrom: 2, filed: 0, toCheck: 0 })
+    // looseFrom counts pages: two sheets, front and back
+    expect(scan2.piles[0]).toMatchObject({ id: blank.id, looseFrom: 4, filed: 0, toCheck: 0 })
     const review = (await get('/api/review')).body
     expect(review.items).toHaveLength(4)
     expect(review.items.every((i: any) => i.kind === 'page')).toBe(true)
@@ -164,7 +171,8 @@ describe('scan and pile routes', () => {
     db.upsertStudent({ code: 'S11', name: 'Eun', nameKo: null, klass: 'Rose', grade: 4, homeroom: null })
     await processAll(await pilePdf('new.pdf', ['SWS1:S11:W30:1A', 'SWS1:S11:W30:2A']))
     const pile = (await get('/api/scan')).body.piles[0]
-    expect(pile).toMatchObject({ status: 'new', assignment: null })
+    // the codes name W30, which does not exist yet: the scan screen offers it as the new assignment's code
+    expect(pile).toMatchObject({ status: 'new', assignment: null, codeAssignment: 'W30' })
     const { status, body } = await post(`/api/piles/${pile.id}/assignment`, { code: 'w30', title: 'Rivers' })
     expect(status).toBe(200)
     expect(body.assignment).toMatchObject({ code: 'W30', title: 'Rivers', klass: 'Rose', grade: 4, sheets: 2, twoSided: 0 })

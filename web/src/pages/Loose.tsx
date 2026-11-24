@@ -36,7 +36,7 @@ export default function Loose() {
 
   useEffect(() => {
     if (!assignment) return setDetail(null)
-    get<AssignmentDetail>(`/api/assignments/${assignment}`).then((d) => { setDetail(d); setPlacements(new Map()); setErr(null) }).catch((e) => setErr(e.message))
+    get<AssignmentDetail>(`/api/assignments/${assignment}`).then((d) => { setDetail(d); setPlacements(new Map()); setErr(null) }).catch((e) => { setErr(e.message); setPending(null) })
   }, [assignment])
   // Pages filed meanwhile (by the scanner, or in another tab) leave the sort.
   useEffect(() => { setPlacements((pl) => new Map([...pl].filter(([id]) => byId.has(id)))); setSelected((s) => new Set([...s].filter((id) => byId.has(id)))) }, [byId])
@@ -137,7 +137,7 @@ export default function Loose() {
       const t = e.target as HTMLElement
       if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return
       if (e.key === 'Escape') setSelected(new Set())
-      else if (e.key === '/') { e.preventDefault(); typedRef.current?.focus() }
+      else if (e.key === '/' && typedRef.current) { e.preventDefault(); typedRef.current.focus() }
       else if ((e.key === 'a' || e.key === 'A') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); setSelected(new Set(tray.map((p) => p.id))) }
     }
     window.addEventListener('keydown', onKey)
@@ -166,16 +166,16 @@ export default function Loose() {
         <p className="lede">Pages that are not part of any pile: single scans, pages a jumbled pile could not settle, and sheets you left loose. Drag each onto its student.</p>
       </section>
 
-      <section className="row" style={{ gap: 16, alignItems: 'flex-end' }}>
+      {pages.length > 0 && <section className="row" style={{ gap: 16, alignItems: 'flex-end' }}>
         <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Assignment</span>
-          <select value={assignment} onChange={(e) => setAssignment(e.target.value)}><option value="">Choose</option>{data.assignments.map((a) => <option key={a.code} value={a.code}>{a.code} · {a.title} · {a.klass}{a.grade != null ? ` G${a.grade}` : ''}</option>)}</select>
+          <select value={assignment} onChange={(e) => { setPending(null); setAssignment(e.target.value) }}><option value="">Choose</option>{data.assignments.map((a) => <option key={a.code} value={a.code}>{a.code} · {a.title} · {a.klass}{a.grade != null ? ` G${a.grade}` : ''}</option>)}</select>
         </label>
         {detail && <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Find a student</span><input type="text" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="name or code" style={{ width: 160 }} /></label>}
         {detail && <span className="muted small">{sides.length} side{sides.length === 1 ? '' : 's'} per student · {students.length} students</span>}
         <span className="muted small" style={{ marginLeft: 'auto' }}>{tray.length} of {pages.length} pages still in the tray{selected.size ? ` · ${selected.size} selected` : ''}</span>
-      </section>
+      </section>}
 
-      {pages.length === 0 && <div className="notice">No loose pages. Everything the scanner saw is in a pile or filed. <Link to="/scan">Back to Scan</Link></div>}
+      {pages.length === 0 && <div className="notice">No loose pages: everything the scanner saw is in a pile or filed. Scan the next pile, and <Link to="/scan">Scan</Link> shows it.</div>}
 
       {pages.length > 0 && (
         <section className="col" style={{ gap: 4 }}>

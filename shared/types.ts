@@ -62,6 +62,20 @@ export interface Pile {
   settledAt: string | null
 }
 
+/** Where a sheet of a pile is now: filed, held for the check, gone loose, set aside as not work, or never scanned. */
+export type SheetStatus = 'filed' | 'held' | 'loose' | 'not_work' | 'missing'
+/** One sheet of a pile as the check screen shows it: the pages at its two places and where they are now. */
+export interface SheetRow { sheet: number; front: Page | null; back: Page | null; status: SheetStatus; student: string | null; studentName: string | null }
+/** GET /api/piles/:id: the pile, its sheets, the held ones (with their thumbnails), and in the no-codes case its packets. */
+export interface PileData {
+  pile: Pile
+  assignment: Assignment | null
+  sheets: SheetRow[]
+  held: Array<HeldSheet & { thumbs: [string | null, string | null] }>
+  packets?: Array<{ sheets: number[]; student: string; pages: Page[] }>
+  roster: Student[]
+}
+
 export interface Page {
   id: number
   status: PageStatus

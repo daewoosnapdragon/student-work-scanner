@@ -1,19 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { get, post, useFetch, fileUrl, type Assignment, type HeldSheet, type Page, type Pile, type Student } from '../api'
+import { get, post, useFetch, fileUrl, type Assignment, type Page, type Student } from '../api'
+import type { PileData } from '../../../shared/types'
 import { useViewer, type ViewerPage } from '../components/Viewer'
 import { cutPackets, nextSheetNumber, packetSize, resolveTyped, typedQuery, type Search } from './pileCheckLogic'
 
-type SheetStatus = 'filed' | 'held' | 'loose' | 'not_work' | 'missing'
-interface SheetRow { sheet: number; front: Page | null; back: Page | null; status: SheetStatus; student: string | null; studentName: string | null }
-interface PileData {
-  pile: Pile
-  assignment: Assignment | null
-  sheets: SheetRow[]
-  held: HeldSheet[]
-  packets?: Array<{ sheets: number[]; student: string | null }>
-  roster: Student[]
-}
 interface Checked { sheet: number; to: string }
 
 export default function PileCheck() {
@@ -83,8 +74,12 @@ const blurIfMouse = (e: MouseEvent<HTMLElement>) => { if (e.detail > 0) e.curren
 function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: Assignment; onDone: (c: Checked[], problem?: string | null) => void }) {
   const { pile, sheets } = data
   const held = useMemo(() => [...data.held].sort((x, y) => x.sheet - y.sheet), [data.held])
-  const [idx, setIdx] = useState(0)
-  const h = held[Math.min(idx, held.length - 1)]
+  // The sheet under the cursor, by number, so a refetch that adds or drops held sheets does not swap it.
+  // When it is filed and leaves the list, the cursor moves on to the next held sheet after it (or the last one).
+  const [cur, setCur] = useState<number | null>(null)
+  const at = cur == null ? 0 : (() => { const i = held.findIndex((x) => x.sheet >= cur); return i === -1 ? held.length - 1 : i })()
+  const h = held[at]
+  const moveTo = (i: number) => setCur(held[Math.max(0, Math.min(i, held.length - 1))].sheet)
   const row = sheets[h.sheet - 1]
   const front = row?.front ?? null
   const back = row?.back ?? null
@@ -183,14 +178,14 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
       if (e.metaKey || e.ctrlKey || e.altKey || location.hash === '#view') return
       const t = e.target as HTMLElement
       if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) {
-        if (e.key === 'Enter' && t.tagName === 'INPUT') { e.preventDefault(); void fileIt() }
+        if (e.key === 'Enter' && (t.tagName === 'INPUT' || t.tagName === 'SELECT')) { e.preventDefault(); void fileIt() }
         if (e.key === 'Escape') t.blur()
         return
       }
       // Enter on a focused button or link does what that button or link does (the File button files); anywhere else it files
       if (e.key === 'Enter' && t && (t.tagName === 'BUTTON' || t.tagName === 'A')) return
-      if (e.key === 'j' || e.key === 'J') setIdx((i) => Math.min(i + 1, held.length - 1))
-      else if (e.key === 'k' || e.key === 'K') setIdx((i) => Math.max(i - 1, 0))
+      if (e.key === 'j' || e.key === 'J') moveTo(at + 1)
+      else if (e.key === 'k' || e.key === 'K') moveTo(at - 1)
       else if (/^[1-3]$/.test(e.key) && Number(e.key) <= otherN) {
         setPick(Number(e.key))
         if (Number(e.key) === otherN) { e.preventDefault(); typedRef.current?.focus() }
@@ -219,7 +214,9 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
     <>
       <div className="muted small row" style={{ gap: 16 }}>
         <span><kbd className="key">J</kbd><kbd className="key">K</kbd> next, previous</span>
-        <span><kbd className="key">1</kbd> to <kbd className="key">{otherN}</kbd> pick</span>
+        {otherN > 1
+          ? <span><kbd className="key">1</kbd> to <kbd className="key">{otherN}</kbd> pick</span>
+          : <span><kbd className="key">1</kbd> picks Someone else</span>}
         <span><kbd className="key">Enter</kbd> file both sides</span>
         <span><kbd className="key">X</kbd> leave it loose</span>
         <span><kbd className="key">R</kbd> rotate</span>
@@ -228,7 +225,7 @@ function HeldOne({ data, assignment: a, onDone }: { data: PileData; assignment: 
       <section className="col" style={{ gap: 14 }}>
         <div className="between" style={{ borderBottom: '1px solid var(--line)', paddingBottom: 6 }}>
           <div className="over">Sheet {h.sheet} of {pile.sheets ?? sheets.length}</div>
-          <div className="muted small">{held.length > 1 ? `${Math.min(idx, held.length - 1) + 1} of ${held.length} to check` : 'the last one to check'}</div>
+          <div className="muted small">{held.length > 1 ? `${at + 1} of ${held.length} to check` : 'the last one to check'}</div>
         </div>
         <div className="grid2" style={{ gridTemplateColumns: 'minmax(0, 3fr) minmax(0, 2fr)', gap: 32 }}>
           <div className="grid2" style={{ gap: 12, alignItems: 'start', gridTemplateColumns: back || pile.twoSided ? 'repeat(2, minmax(0, 1fr))' : 'minmax(0, 1fr)' }}>
@@ -308,6 +305,9 @@ function Packets({ data, assignment: a, onFiled }: { data: PileData; assignment:
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const { open: openViewer } = useViewer()
+  // who has a packet already, from the assignment's page, so the picker can say so
+  const { data: detail } = useFetch<{ students: Array<{ code: string; packet: unknown }> }>(`/api/assignments/${a.code}`)
+  const alreadyIn = new Set((detail?.students ?? []).filter((s) => s.packet).map((s) => s.code))
 
   const packets = cutPackets(order.length, perStudent, sizes).map((pk) => pk.map((i) => order[i - 1]))
   const pickFor = (k: number) => picks[k] ?? given[k]?.student ?? ''
@@ -378,7 +378,7 @@ function Packets({ data, assignment: a, onFiled }: { data: PileData; assignment:
               <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Student</span>
                 <select value={pickFor(k)} onChange={(e) => setPicks({ ...picks, [k]: e.target.value })}>
                   <option value="">Choose</option>
-                  {roster.map((s) => <option key={s.code} value={s.code}>{s.name}</option>)}
+                  {roster.map((s) => <option key={s.code} value={s.code}>{s.name}{alreadyIn.has(s.code) ? ' · already in' : ''}</option>)}
                 </select>
               </label>
               <label className="row"><span className="over quiet" style={{ fontSize: 10 }}>Sheets</span>
