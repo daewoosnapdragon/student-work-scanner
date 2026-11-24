@@ -4,6 +4,7 @@ import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'
 import './styles.css'
 import Shell from './components/Shell'
 import Scan, { NotYet } from './pages/Scan'
+import PileCheck from './pages/PileCheck'
 import ScanLog from './pages/ScanLog'
 import Students from './pages/Students'
 import StudentPage from './pages/Student'
@@ -20,7 +21,7 @@ const router = createBrowserRouter([
       { index: true, element: <Scan /> },
       { path: 'scan', element: <Scan /> },
       { path: 'scan/log', element: <ScanLog /> },
-      { path: 'scan/pile/:id', element: <NotYet /> },
+      { path: 'scan/pile/:id', element: <PileCheck /> },
       { path: 'scan/loose', element: <NotYet /> },
       { path: 'today', element: <Navigate to="/scan" replace /> },
       { path: 'students', element: <Students /> },
