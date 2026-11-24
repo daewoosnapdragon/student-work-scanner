@@ -2,7 +2,7 @@
 // watched end to end without a scanner. Each page is an A4 sheet at 150 dpi
 // with the title, a name line, some pencil-coloured writing, and the QR code in
 // the top right corner. One page has its code torn off so it lands in review,
-// and one is a rescan of a side already filed.
+// and one is a rescan of a side already filed, which replaces the first scan on its own.
 import fs from 'node:fs'
 import path from 'node:path'
 import sharp from 'sharp'

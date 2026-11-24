@@ -2,11 +2,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import sharp from 'sharp'
 import * as mupdf from 'mupdf'
-import { ARCHIVE_DIR, DATA_DIR, HOLDING_DIR, INBOX_DIR, INCOMPLETE_AFTER_MIN, PDF_DPI, THUMBS_DIR } from './config.js'
+import { ARCHIVE_DIR, DATA_DIR, HOLDING_DIR, INBOX_DIR, INCOMPLETE_AFTER_MIN, ORIGINALS_DIR, PDF_DPI, THUMBS_DIR } from './config.js'
 import { decodePage, makeThumb } from './decode.js'
-import { deletePacket, getAssignment, getStudent, hasSide, insertPage, nextSeq, openPackets, packetPages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
+import { closePacketIncomplete, deletePacket, getAssignment, getStudent, insertPage, upsertAssignment, moveAnnotations, nextSeq, openPackets, packetPages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
 import { broadcast } from './events.js'
-import type { Packet, Page, PageRef, Side } from '../shared/types.js'
+import type { Assignment, Packet, Page, PageRef, Side } from '../shared/types.js'
 import { shortSide } from './codes.js'
 
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.tif', '.tiff', '.webp', '.bmp'])
@@ -23,12 +23,41 @@ export async function processInboxFile(file: string): Promise<string[]> {
   const ext = path.extname(file).toLowerCase()
   if (ext === '.pdf') return splitPdf(file)
   if (!IMAGE_EXT.has(ext)) return []
-  await processImage(file, path.basename(file))
+  await processImage(file, path.basename(file), originOf(file))
   return []
 }
 
+export interface Origin { origin: string; originPage: number }
+
+// Which PDF a rendered page came from. Pages rendered in this run are
+// remembered by path; one left in the inbox from before a restart is matched
+// to its PDF by name, since the rendered name is the PDF's plus __pNN.
+const rendered = new Map<string, Origin>()
+function originOf(file: string): Origin | null {
+  const known = rendered.get(file)
+  if (known) {
+    rendered.delete(file)
+    return known
+  }
+  const m = /^(.+)__p(\d{2,})\.jpe?g$/i.exec(path.basename(file))
+  if (!m) return null
+  const pdf = path.join(ORIGINALS_DIR, `${m[1]}.pdf`)
+  return fs.existsSync(pdf) ? { origin: rel(pdf), originPage: Number(m[2]) } : null
+}
+
+// A free name under originals/: the PDF's own, or with -2, -3 … when a scanner
+// reuses names from one day to the next.
+function originalsPath(file: string) {
+  const ext = path.extname(file)
+  const stem = path.basename(file, ext)
+  let dest = path.join(ORIGINALS_DIR, `${stem}${ext}`)
+  for (let n = 2; fs.existsSync(dest); n++) dest = path.join(ORIGINALS_DIR, `${stem}-${n}${ext}`)
+  return dest
+}
+
 // Renders each PDF page with MuPDF (bundled as WebAssembly, so nothing to
-// install) into the inbox as JPEGs named after the PDF, then removes the PDF.
+// install) into the inbox as JPEGs named after the PDF, then moves the PDF to
+// originals/ so the scan itself is never lost.
 async function splitPdf(file: string): Promise<string[]> {
   const stem = path.basename(file, path.extname(file))
   const out: string[] = []
@@ -51,8 +80,11 @@ async function splitPdf(file: string): Promise<string[]> {
       out.push(dest)
     }
     doc.destroy()
-    fs.rmSync(file)
-    console.log(`[pdf] ${path.basename(file)}: ${n} page${n === 1 ? '' : 's'}`)
+    fs.mkdirSync(ORIGINALS_DIR, { recursive: true })
+    const kept = originalsPath(file)
+    fs.renameSync(file, kept)
+    out.forEach((f, i) => rendered.set(f, { origin: rel(kept), originPage: i + 1 }))
+    console.log(`[pdf] ${path.basename(file)}: ${n} page${n === 1 ? '' : 's'}, kept as ${rel(kept)}`)
     return out
   } catch (err) {
     console.error('[pdf] could not open', file, err)
@@ -74,7 +106,7 @@ async function processImageAsReview(file: string, sourceName: string, reason: st
   broadcast('review', p)
 }
 
-export async function processImage(file: string, sourceName: string): Promise<Page> {
+export async function processImage(file: string, sourceName: string, from: Origin | null = null): Promise<Page> {
   const at = new Date().toISOString()
   const seq = nextSeq()
   let decoded
@@ -97,13 +129,18 @@ export async function processImage(file: string, sourceName: string): Promise<Pa
   const problem = ref ? placementProblem(ref) : decoded.text ? `Code read as "${decoded.text}" but it is not one of ours` : 'Code not readable'
 
   if (ref && !problem) {
+    // A side scanned again replaces the scan already there: the newer scan is
+    // the one wanted, and its comments move over with it.
+    const dup = duplicateOf(ref)
     const dest = archivePath(ref, sourceName)
     fs.mkdirSync(path.dirname(dest), { recursive: true })
     fs.renameSync(file, dest)
     const p = insertPage({
       status: 'filed', student: ref.student, assignment: ref.assignment, page: ref.page, side: ref.side, scannedAt: at, seq,
       sourceName, filePath: rel(dest), thumbPath, width: decoded.width, height: decoded.height, decoded: decoded.text, reason: null, filedFrom: 'code',
+      origin: from?.origin ?? null, originPage: from?.originPage ?? null,
     })
+    if (dup) replaceScan(dup, p)
     const packet = refreshPacket(ref.student, ref.assignment, at)
     broadcast('page', { page: p, packet })
     if (packet.complete) { broadcast('packet', packet); onComplete?.(packet) }
@@ -115,7 +152,7 @@ export async function processImage(file: string, sourceName: string): Promise<Pa
   const p = insertPage({
     status: 'review', student: ref?.student ?? null, assignment: ref?.assignment ?? null, page: ref?.page ?? null, side: ref?.side ?? null,
     scannedAt: at, seq, sourceName, filePath: rel(dest), thumbPath, width: decoded.width, height: decoded.height, decoded: decoded.text,
-    reason: problem, filedFrom: null,
+    reason: problem, filedFrom: null, origin: from?.origin ?? null, originPage: from?.originPage ?? null,
   })
   broadcast('review', p)
   return p
@@ -128,8 +165,16 @@ function placementProblem(ref: PageRef): string | null {
   if (!a) return `Code names assignment ${ref.assignment}, which has not been set up`
   if (ref.page > a.sheets) return `Code says sheet ${ref.page} but ${a.code} has ${a.sheets}`
   if (ref.side === 'b' && !a.twoSided) return `Code says a back side but ${a.code} is single-sided`
-  if (hasSide(ref.student, ref.assignment, ref.page, ref.side)) return `${ref.student} already has ${shortSide(ref.page, ref.side)} of ${ref.assignment} filed; this may be a rescan`
   return null
+}
+
+// The earlier scan of a side steps aside for the new one. Its file has just
+// been written over (same archive path), so only the record and the comments
+// change hands.
+function replaceScan(old: Page, by: Page) {
+  updatePage(old.id, { status: 'replaced', reason: `replaced by rescan, page ${by.id}` })
+  moveAnnotations(old.id, by.id)
+  console.log(`[rescan] ${old.student} ${old.assignment} ${shortSide(old.page!, old.side!)}: ${old.sourceName} replaced by ${by.sourceName}`)
 }
 
 // Review decisions -----------------------------------------------------------
@@ -143,7 +188,6 @@ export function fileFromReview(pageId: number, ref: PageRef, allowDuplicate = fa
   if (!a) throw new Error(`no assignment ${ref.assignment}`)
   const dup = duplicateOf(ref)
   if (dup && !allowDuplicate) throw new Error(`${ref.student} already has ${shortSide(ref.page, ref.side)} of ${ref.assignment}`)
-  if (dup) updatePage(dup.id, { status: 'replaced', reason: `replaced by rescan, page ${pageId}` })
   const from = abs(p.filePath)
   const dest = archivePath(ref, p.sourceName)
   fs.mkdirSync(path.dirname(dest), { recursive: true })
@@ -151,11 +195,46 @@ export function fileFromReview(pageId: number, ref: PageRef, allowDuplicate = fa
   updatePage(pageId, {
     status: 'filed', student: ref.student, assignment: ref.assignment, page: ref.page, side: ref.side, filePath: rel(dest), reason: null, filedFrom: 'review',
   })
+  if (dup) replaceScan(dup, getPage(pageId)!)
   const packet = refreshPacket(ref.student, ref.assignment, p.scannedAt)
   const updated = getPage(pageId)!
   broadcast('page', { page: updated, packet })
   if (packet.complete) onComplete?.(packet)
   return updated
+}
+
+// Pages whose code named an assignment that was never set up: the codes say
+// which students, how many sheets and whether there are backs, so the
+// assignment is made from them and every one of those pages is filed.
+export function setupAssignmentFromReview(code: string, given: { title?: string | null; klass?: string | null; grade?: number | null }): { assignment: Assignment; filed: number; failed: Array<{ pageId: number; error: string }> } {
+  code = code.toUpperCase()
+  const pages = reviewPages().filter((p) => p.assignment === code && p.student && p.page && p.side).sort((a, b) => a.seq - b.seq)
+  if (!pages.length) throw new Error(`no pages waiting for ${code}`)
+  if (!getAssignment(code)) {
+    const students = pages.map((p) => getStudent(p.student!)).filter((s): s is NonNullable<typeof s> => !!s)
+    const klass = given.klass?.trim() || mostCommon(students.map((s) => s.klass)) || 'Class'
+    const grade = given.grade ?? mostCommon(students.map((s) => s.grade).filter((g): g is number => g != null)) ?? null
+    upsertAssignment({
+      code, title: given.title?.trim() || code, klass, grade, assignedOn: new Date().toISOString().slice(0, 10),
+      sheets: Math.max(1, ...pages.map((p) => p.page!)), twoSided: pages.some((p) => p.side === 'b') ? 1 : 0, tags: '', notes: null,
+    })
+  }
+  let filed = 0
+  const failed: Array<{ pageId: number; error: string }> = []
+  for (const p of pages) {
+    try {
+      fileFromReview(p.id, { student: p.student!, assignment: code, page: p.page!, side: p.side! }, true)
+      filed++
+    } catch (err) {
+      failed.push({ pageId: p.id, error: (err as Error).message })
+    }
+  }
+  return { assignment: getAssignment(code)!, filed, failed }
+}
+function mostCommon<T>(xs: T[]): T | undefined {
+  const n = new Map<T, number>()
+  for (const x of xs) n.set(x, (n.get(x) ?? 0) + 1)
+  return [...n.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
 }
 
 // Set by the server at startup: what happens when a packet completes (the analysis step, when it is on).
@@ -229,6 +308,16 @@ export function skipAllInReview(notWork = false): number {
 export function stalePackets(now = Date.now()) {
   const cutoff = now - INCOMPLETE_AFTER_MIN * 60_000
   return openPackets().filter((p) => p.sides > 0 && Date.parse(p.lastAt) < cutoff)
+}
+
+// Every packet that stopped arriving is filed as it is, in one go: the sides
+// that came stay filed, a side that turns up later still joins, and nothing
+// waits in review for it any more.
+export function closeStalePackets(now = Date.now()): number {
+  const stale = stalePackets(now)
+  for (const p of stale) closePacketIncomplete(p.student, p.assignment)
+  if (stale.length) broadcast('review', { closedPackets: stale.length })
+  return stale.length
 }
 
 function duplicateOf(ref: PageRef): Page | undefined {

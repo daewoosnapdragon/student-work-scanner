@@ -37,7 +37,7 @@ For a taskbar icon, double-click `windows\Make Shortcut.cmd` once. It puts a Stu
 
 If `npm` refuses to run with a message about scripts being disabled, run this once in PowerShell: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
-Other settings: `SWS_DATA_DIR` (where the archive, thumbnails and database live; default `data/`), `PORT` (default 4710), `SWS_INCOMPLETE_AFTER_MIN` (a packet still missing sides this long after its last page goes to review; default 120), `SWS_PDF_DPI` (default 200).
+Other settings: `SWS_DATA_DIR` (where the archive, kept PDFs, thumbnails and database live; default `data/`), `PORT` (default 4710), `SWS_INCOMPLETE_AFTER_MIN` (a packet still missing sides this long after its last page goes to review; default 120), `SWS_PDF_DPI` (default 200).
 
 ## Trying it without a scanner
 
@@ -47,22 +47,28 @@ npm run samples        # writes 12 fake scanned pages into the inbox
 npm start
 ```
 
-Open http://localhost:4710. Ten pages file themselves. One has its code torn off and lands in Review with the right guess ranked first; one is a rescan of a side already filed and asks before replacing it. Add `-- --slow` to `npm run samples` while the server is running to watch pages arrive one by one on Today.
+Open http://localhost:4710. Ten pages file themselves. One has its code torn off and lands in Review with the right guess ranked first; one is a rescan of a side already filed and replaces it on its own. Add `-- --slow` to `npm run samples` while the server is running to watch pages arrive one by one on Today.
 
 ## How a page is filed
 
-1. The watcher waits until the file has stopped growing, then handles files one at a time in the order they arrived. A PDF is rendered to one JPEG per page first, and those pages are handled next, in page order.
+1. The watcher waits until the file has stopped growing, then handles files one at a time in the order they arrived. A PDF is rendered to one JPEG per page first, and those pages are handled next, in page order. The PDF itself is then moved to `data/originals/`, never deleted; every page remembers which PDF and page number it came from, and Review links to it.
 2. The decoder looks for a QR code on the whole page, then in each corner at full resolution, then again after sharpening and thresholding. Takes about 100 ms on a 150 dpi page.
-3. The code reads `SWS1:S07:W23:2B` (older sets: `SWS1|S07|W23|2b`): student S07, assignment W23, sheet 2, back. If the student and assignment exist, the side is one the assignment expects and that side is not already filed, the page moves to `data/archive/W23/S07/2b.jpg` and the packet count goes up. A packet is complete when every expected side is in. Not every printed side has to come back: on the assignment's Edit form, **Comes back to be scanned** unticks a side that stays with the student, such as a reading page, and the packet then waits only for the ticked ones (a reading page scanned anyway is kept, not counted).
+3. The code reads `SWS1:S07:W23:2B` (older sets: `SWS1|S07|W23|2b`): student S07, assignment W23, sheet 2, back. If the student and assignment exist, the side is one the assignment expects and that side is not already filed, the page moves to `data/archive/W23/S07/2b.jpg` and the packet count goes up. A side that is already filed is replaced by the new scan: scan a pile again and the newer scans take over, comments and all, with the earlier scans kept in the record as replaced. A packet is complete when every expected side is in. Not every printed side has to come back: on the assignment's Edit form, **Comes back to be scanned** unticks a side that stays with the student, such as a reading page, and the packet then waits only for the ticked ones (a reading page scanned anyway is kept, not counted).
 4. Otherwise the page goes to `data/holding/` and the review queue, with a reason. For an unreadable code the guesses come from scan order: the pages just before and after it say whose stack this came from, and which side that packet is still missing. A packet that stops arriving before it is complete also shows up in review after two hours, to be filed as it is; the two hours count from the last side that was waited for, so a packet holding only pages that stay with the student has not started.
 
 Clicking any scan opens it over the current screen rather than in a new tab: wheel or pinch to zoom, drag to move, arrow keys to step through the packet's sides (on a student's page, through all their work), R to turn it, 0 to fit, Escape or the browser's Back to close. Where there is analysis, its notes sit beside the page. On Compare, the two children's pages open together and zoom and move as one.
 
 In the viewer, **Comment** (or C) lets you drag a box over any spot on the page and write what you see there: **Praise**, **Fix** or **Note**. Comments are kept with the page, show as numbered boxes in the viewer and as a count on the thumbnail, and go to Claude the next time the packet is analysed, both drawn on the page and listed by number. They are the ground truth: a fix goes first in the fix-it table in your words, praise is quoted in the student's note, and a question in a note is answered in the teacher's part. The class and packet PDFs carry the boxes too, so the copied prompt can point at them.
 
-Review is keyboard first: J and K move, 1 to 3 pick a guess, Enter files, X skips, R rotates. Skip everything in the queue clears a backlog in one go, for example old scans without codes that were already in the folder when the program first started. Skipped pages stay on disk under `data/holding/`.
+Review is keyboard first: J and K move, 1 to 3 pick a guess, Enter files, X skips, R rotates. The queue under the page shows a thumbnail of each item; click a row to see it large.
+
+Three kinds of item clear themselves in one go. Pages whose code names an assignment nobody set up get a **Set up W14-1 and file N** button: the assignment is made from the codes (class, grade, sheets, sides) with the title you give it, and the pages file themselves. Packets still missing a side after two hours are listed too; **Close as it is** keeps what came and takes one off the list, **Close all incomplete packets** does them all, and a missing side scanned later still joins its packet. **Skip everything in the queue** marks the remaining pages skipped. When the code did not read, T and then what the printed label says is the quickest way: `S07 W23 2 back` (or a name, `Minji W23 2 back`) fills the student, assignment and side, Enter files it. The side chips follow the chosen assignment and cross out the sides that student already has. Skip everything in the queue clears a backlog in one go, for example old scans without codes that were already in the folder when the program first started. Skipped pages stay on disk under `data/holding/`.
 
 Before the first run, empty the scan folder of old scans, or expect them all in review.
+
+### Sorting a pile by hand
+
+**Sort onto students** (from Review) shows every waiting page as a thumbnail in scan order, and the class as a grid of cards saying what each student has filed and still needs. Drag a page onto a student and it takes the next side that student is missing; click the side label to move it to another side. Click pages to select several (shift-click for a run) and drag them together, or press a card's **Put here**. Drop a page back on the tray to undo. One button files the lot; a side that was filed already is marked in red and replaced.
 
 ### Work from before the codes
 

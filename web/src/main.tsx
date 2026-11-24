@@ -11,6 +11,7 @@ import AssignmentPage from './pages/Assignment'
 import Compare from './pages/Compare'
 import Review from './pages/Review'
 import Stack from './pages/Stack'
+import Sort from './pages/Sort'
 import SettingsPage from './pages/Settings'
 
 const router = createBrowserRouter([
@@ -26,6 +27,7 @@ const router = createBrowserRouter([
       { path: 'compare', element: <Compare /> },
       { path: 'review', element: <Review /> },
       { path: 'review/stack', element: <Stack /> },
+      { path: 'review/sort', element: <Sort /> },
       { path: 'settings', element: <SettingsPage /> },
     ],
   },

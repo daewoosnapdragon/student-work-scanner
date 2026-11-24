@@ -131,6 +131,9 @@ function migrate(d: DatabaseSync) {
   if (!acols.includes('rubric')) d.exec('ALTER TABLE assignments ADD COLUMN rubric TEXT')
   if (!acols.includes('expect')) d.exec('ALTER TABLE assignments ADD COLUMN expect TEXT')
   if (!acols.includes('waiting')) d.exec('ALTER TABLE assignments ADD COLUMN waiting INTEGER NOT NULL DEFAULT 0')
+  const pgcols = (d.prepare('PRAGMA table_info(pages)').all() as Array<{ name: string }>).map((c) => c.name)
+  if (!pgcols.includes('origin')) d.exec('ALTER TABLE pages ADD COLUMN origin TEXT')
+  if (!pgcols.includes('originPage')) d.exec('ALTER TABLE pages ADD COLUMN originPage INTEGER')
   const pcols = (d.prepare('PRAGMA table_info(packets)').all() as Array<{ name: string }>).map((c) => c.name)
   if (!pcols.includes('feedback')) d.exec('ALTER TABLE packets ADD COLUMN feedback TEXT')
   if (!pcols.includes('analysedAt')) d.exec('ALTER TABLE packets ADD COLUMN analysedAt TEXT')
@@ -252,14 +255,14 @@ export function nextSeq(): number {
 export function insertPage(p: Omit<Page, 'id'>): Page {
   const r = getDb()
     .prepare(
-      `INSERT INTO pages (status,student,assignment,page,side,scannedAt,seq,sourceName,filePath,thumbPath,width,height,decoded,reason,filedFrom)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO pages (status,student,assignment,page,side,scannedAt,seq,sourceName,filePath,thumbPath,width,height,decoded,reason,filedFrom,origin,originPage)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       p.status, p.student, p.assignment, p.page, p.side, p.scannedAt, p.seq, p.sourceName, p.filePath,
-      p.thumbPath, p.width, p.height, p.decoded, p.reason, p.filedFrom,
+      p.thumbPath, p.width, p.height, p.decoded, p.reason, p.filedFrom, p.origin ?? null, p.originPage ?? null,
     )
-  return { ...p, id: Number(r.lastInsertRowid) }
+  return { ...p, origin: p.origin ?? null, originPage: p.originPage ?? null, id: Number(r.lastInsertRowid) }
 }
 export function updatePage(id: number, patch: Partial<Page>) {
   const keys = Object.keys(patch) as Array<keyof Page>
@@ -472,6 +475,10 @@ export function updateAnnotation(id: number, patch: Partial<Pick<Annotation, 'x'
   const n = { ...a, ...patch }
   getDb().prepare('UPDATE annotations SET x = ?, y = ?, w = ?, h = ?, kind = ?, text = ? WHERE id = ?').run(n.x, n.y, n.w, n.h, n.kind, n.text, id)
   return getAnnotation(id)
+}
+/** A rescan takes over the comments pinned to the scan it replaces: same page, same spots. */
+export function moveAnnotations(fromPageId: number, toPageId: number): number {
+  return Number(getDb().prepare('UPDATE annotations SET pageId = ? WHERE pageId = ?').run(toPageId, fromPageId).changes)
 }
 export function deleteAnnotation(id: number): boolean {
   return getDb().prepare('DELETE FROM annotations WHERE id = ?').run(id).changes > 0

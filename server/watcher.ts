@@ -1,7 +1,7 @@
 import chokidar from 'chokidar'
 import fs from 'node:fs'
 import path from 'node:path'
-import { INBOX_DIR } from './config.js'
+import { INBOX_DIR, ORIGINALS_DIR } from './config.js'
 import { isScanFile, processInboxFile } from './pipeline.js'
 import { broadcast } from './events.js'
 import { setMeta } from './db.js'
@@ -13,7 +13,7 @@ let busy = false
 let lastSeen: string | null = null
 
 export function watcherStatus() {
-  return { inbox: INBOX_DIR, queued: queue.length, busy, lastSeen }
+  return { inbox: INBOX_DIR, originals: ORIGINALS_DIR, queued: queue.length, busy, lastSeen }
 }
 
 async function drain() {
