@@ -7,7 +7,7 @@ const sides4 = [{ page: 1, side: 'a' }, { page: 1, side: 'b' }, { page: 2, side:
 const ref = (student: string, page: number, side: 'a' | 'b'): PageRef => ({ student, assignment: 'W14', page, side })
 const roster = [{ code: 'S01', name: 'Ara' }, { code: 'S02', name: 'Bo' }, { code: 'S03', name: 'Cho' }]
 function input(refs: Array<PageRef | null>, over: Partial<PileInput> = {}): PileInput {
-  return { pages: refs.map((r, i) => ({ id: 100 + i, index: i + 1, ref: r })), assignment: W as any, sides: [...sides4], printed: [...sides4], filed: new Map(), roster, turnedIn: new Set(), ...over }
+  return { pages: refs.map((r, i) => ({ id: 100 + i, index: i + 1, ref: r })), pageCount: refs.length, assignment: W as any, sides: [...sides4], printed: [...sides4], filed: new Map(), roster, turnedIn: new Set(), ...over }
 }
 const filed = (r: ReturnType<typeof settlePile>) => r.decisions.filter((d) => d.kind === 'file').map((d: any) => `${d.pageId}:${d.ref.student}${d.ref.page}${d.ref.side}:${d.filedFrom}`)
 const held = (r: ReturnType<typeof settlePile>) => r.decisions.filter((d) => d.kind === 'hold')
@@ -29,6 +29,13 @@ describe('settling a pile', () => {
     expect(filed(r)).toHaveLength(8)
     expect(filed(r)).toContain('100:S011a:code')
     expect(filed(r)).toContain('107:S011b:code')
+  })
+  it('pairs by the PDF page count when pages are missing, reading a sheet from whichever side is there', () => {
+    // sheet 2 (pages 2 and 7) gone entirely, and the front of sheet 3 (page 3) gone: pairing still goes by 8
+    const pages = input(full).pages.filter((p) => ![2, 7, 3].includes(p.index))
+    const r = settlePile(input(full, { pages }))
+    expect(r).toMatchObject({ status: 'done', sheets: 4 })
+    expect(filed(r).sort()).toEqual(['100:S011a:code', '103:S022a:code', '104:S022b:code', '105:S021b:code', '107:S011b:code'])
   })
   it('fills a side whose code missed from its mirror', () => {
     const r = settlePile(input(full.map((x, i) => (i === 7 ? null : x))))

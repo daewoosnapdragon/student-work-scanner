@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import QRCode from 'qrcode'
+import sharp from 'sharp'
 import { PDFDocument } from 'pdf-lib'
 
 // The pipeline reads its folders from the environment when it loads, so the
@@ -100,5 +101,72 @@ describe('a PDF settles as a pile', () => {
     pipeline.forgetRendered()
     await pipeline.processInboxFile(rendered[3])
     expect(db.listPiles()[0].status).toBe('done')
+  })
+
+  it('names reused PDF pages after the kept file, and a leftover page never joins a settled pile', async () => {
+    // the first dup.pdf: no codes, named, and its first sheet sent loose, so index 1 is free in a settled pile
+    await processAll(await pilePdf('dup.pdf', new Array(4).fill(null)))
+    const first = filing.namePile(db.listPiles()[0].id, 'W14')
+    filing.looseSheet(first.id, 1)
+    expect(db.pilePages(first.id).map((p) => p.pileIndex)).toEqual([2, 3])
+
+    // the second dup.pdf is kept as dup-2.pdf, and its pages carry that name
+    const rendered = await pipeline.processInboxFile(await pilePdf('dup.pdf', ['SWS1:S01:W14:1A', 'SWS1:S01:W14:2A', 'SWS1:S01:W14:2B', 'SWS1:S01:W14:1B']))
+    expect(rendered.map((f) => path.basename(f))).toEqual(['dup-2__p01.jpg', 'dup-2__p02.jpg', 'dup-2__p03.jpg', 'dup-2__p04.jpg'])
+    const second = db.listPiles()[0]
+    expect(second.origin).toBe('originals/dup-2.pdf')
+    for (const f of rendered.slice(0, 3)) await pipeline.processInboxFile(f)
+    pipeline.forgetRendered()
+    await pipeline.processInboxFile(rendered[3])
+    expect(db.pilePages(second.id)).toHaveLength(4)
+    expect(db.getPile(second.id)!.status).toBe('done')
+
+    // a stray page named after the first PDF finds the first pile settled, and stays out of it
+    const stray = path.join(config.INBOX_DIR, 'dup__p01.jpg')
+    await sharp({ create: { width: 200, height: 280, channels: 3, background: '#fff' } }).jpeg().toFile(stray)
+    await pipeline.processInboxFile(stray)
+    const p = db.reviewPages().at(-1)!
+    expect(p).toMatchObject({ sourceName: 'dup__p01.jpg', origin: 'originals/dup.pdf', pile: null })
+    expect(db.pilePages(first.id).map((x) => x.pileIndex)).toEqual([2, 3])
+    expect(db.getPile(first.id)!.status).toBe('checking')
+  })
+
+  it('names a pile again after a sheet went loose, pairing by the PDF page count', async () => {
+    await processAll(await pilePdf('gap.pdf', new Array(8).fill(null)))
+    let pile = filing.namePile(db.listPiles()[0].id, 'W14')
+    expect(pile.held.map((h) => h.sheet)).toEqual([1, 2, 3, 4])
+    expect(db.getPage(pile.held[0].pages[0])!.reason).toBe(pile.held[0].why) // a held page says why
+    filing.looseSheet(pile.id, 2)
+    pile = filing.namePile(pile.id, 'W14')
+    expect(pile.status).toBe('checking')
+    expect(pile.held.map((h) => h.sheet)).toEqual([1, 3, 4])
+    const at = (id: number | null) => (id == null ? null : db.getPage(id)!.pileIndex)
+    expect(pile.held.map((h) => h.pages.map(at))).toEqual([[1, 8], [3, 6], [4, 5]])
+  })
+
+  it('leaves a pile that never got every page waiting, and settles it when named', async () => {
+    const rendered = await pipeline.processInboxFile(await pilePdf('short.pdf', new Array(4).fill(null)))
+    for (const f of rendered.slice(0, 3)) await pipeline.processInboxFile(f)
+    fs.rmSync(rendered[3]) // the last page never arrives
+    let pile = db.listPiles()[0]
+    expect(pile.status).toBe('new')
+    pile = filing.namePile(pile.id, 'W14')
+    expect(pile.status).toBe('checking')
+    expect(pile.held.map((h) => h.sheet)).toEqual([1, 2])
+    const at = (id: number | null) => (id == null ? null : db.getPage(id)!.pileIndex)
+    expect(pile.held.map((h) => h.pages.map(at))).toEqual([[1, null], [2, 3]])
+  })
+
+  it('sends a page loose when its code reads but cannot be filed', async () => {
+    db.upsertStudent({ code: 'S09', name: 'Gone', nameKo: null, klass: 'Daisy', grade: 3, homeroom: null })
+    const rendered = await pipeline.processInboxFile(await pilePdf('gone.pdf', ['SWS1:S09:W14:1A', 'SWS1:S09:W14:2A', 'SWS1:S09:W14:2B', 'SWS1:S09:W14:1B']))
+    db.getDb().prepare("DELETE FROM students WHERE code = 'S09'").run() // gone from the roster before the pile settles
+    for (const f of rendered) await pipeline.processInboxFile(f)
+    const pile = db.listPiles()[0]
+    expect(pile.status).toBe('done')
+    expect(db.pilePages(pile.id)).toEqual([])
+    const loose = db.reviewPages().filter((p) => p.sourceName.startsWith('gone__'))
+    expect(loose).toHaveLength(4)
+    expect(loose.every((p) => p.pile === null && /no student S09/.test(p.reason ?? ''))).toBe(true)
   })
 })

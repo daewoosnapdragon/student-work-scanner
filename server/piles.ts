@@ -9,7 +9,8 @@
 import type { Assignment, PageRef, PileStatus, Side } from '../shared/types.js'
 
 export interface PileInput {
-  pages: Array<{ id: number; index: number; ref: PageRef | null }> // index 1-based, in PDF order
+  pages: Array<{ id: number; index: number; ref: PageRef | null }> // index 1-based, in PDF order; an index may be missing (a page gone loose or never decoded)
+  pageCount: number // the PDF's page count: pairing goes by this, and a missing index is an absent page
   assignment: Assignment | null // null: not yet named (then only `assignment` of the result is meaningful)
   sides: Array<{ page: number; side: Side }> // sidesFor(assignment); [] when null
   printed: Array<{ page: number; side: Side }> // printedSidesFor(assignment)
@@ -85,13 +86,15 @@ export function settlePile(input: PileInput): SettleResult {
   }
   const refOf = (p: PileRow | undefined) => (p && !loose.has(p.id) ? p.ref : null)
 
-  if (twoSided && input.pages.length % 2 === 1) return jumbled(input, own, decisions, loose)
+  if (twoSided && input.pageCount % 2 === 1) return jumbled(input, own, decisions, loose)
 
-  const pairs = pairSheets(input.pages.length, twoSided)
-  const sheets: Sheet[] = pairs.map(([fi, bi], i) => {
-    const front = byIndex.get(fi)!
+  const pairs = pairSheets(input.pageCount, twoSided)
+  // A sheet with neither page in the input (both gone loose, or never decoded) is skipped; one with a single page is read from that side.
+  const sheets: Sheet[] = []
+  pairs.forEach(([fi, bi], i) => {
+    const front = byIndex.get(fi)
     const back = bi === null ? undefined : byIndex.get(bi)
-    return readSheet(i + 1, front, back, refOf(front), refOf(back), twoSided, name)
+    if (front || back) sheets.push(readSheet(i + 1, front, back, refOf(front), refOf(back), twoSided, name))
   })
 
   // Three or more sheets in a row whose codes disagree with their mirror: the pile was not fed as expected.
@@ -118,7 +121,7 @@ export function settlePile(input: PileInput): SettleResult {
     for (let i = 0, k = 0; i < live.length; i += per, k++) {
       packets.push({ sheets: live.slice(i, i + per).map((s) => s.n), student: waiting[k] ?? null })
     }
-    return { assignment: own, status: 'checking', sheets: sheets.length, twoSided, decisions, packets }
+    return { assignment: own, status: 'checking', sheets: pairs.length, twoSided, decisions, packets }
   }
 
   placeUnknowns(live, a.sheets, input.filed, twoSided, name)
@@ -137,7 +140,7 @@ export function settlePile(input: PileInput): SettleResult {
         continue
       }
       // The side this page must be, from its position: in a two-sided pile the pages past the middle are backs.
-      const side: Side = twoSided && p.index > input.pages.length / 2 ? 'b' : 'a'
+      const side: Side = twoSided && p.index > input.pageCount / 2 ? 'b' : 'a'
       if (!printed.has(`${s.page}${side}`)) {
         decisions.push({ kind: 'not_work', pageId: p.id, why: `sheet ${s.page} has no printed ${side === 'b' ? 'back' : 'front'}` })
       } else {
@@ -146,19 +149,19 @@ export function settlePile(input: PileInput): SettleResult {
     }
   }
   const status: PileStatus = decisions.some((d) => d.kind === 'hold') ? 'checking' : 'done'
-  return { assignment: own, status, sheets: sheets.length, twoSided, decisions }
+  return { assignment: own, status, sheets: pairs.length, twoSided, decisions }
 }
 
 function readSheet(
   n: number,
-  front: PileRow,
+  front: PileRow | undefined,
   back: PileRow | undefined,
   f: PageRef | null,
   b: PageRef | null,
   twoSided: boolean,
   name: (s: string) => string,
 ): Sheet {
-  const pages = back ? [front, back] : [front]
+  const pages = [front, back].filter((p): p is PileRow => !!p)
   const says = (r: PageRef) => `${name(r.student)}, sheet ${r.page}`
   const guess = (r: PageRef, where: string): Guess => ({ student: r.student, page: r.page, why: `the code on the ${where} says so` })
   if (twoSided) {

@@ -11,14 +11,19 @@ import { fileFromReview } from './pipeline.js'
 import { pairSheets, pileAssignment, settlePile, type PileInput, type SettleResult } from './piles.js'
 import type { Assignment, HeldSheet, Page, PageRef, Pile, Side } from '../shared/types.js'
 
-/** Settles a pile from its pages as they stand: files what is certain, holds what is not. */
-export function settle(pileId: number): Pile {
+/**
+ * Settles a pile from the pages it has: files what is certain, holds what is not.
+ * Pairing goes by the PDF's page count, so a page that never arrived or went loose is an absent side.
+ * `named` is the assignment the teacher gave; it is stored on the pile only by a settle that succeeds.
+ */
+export function settle(pileId: number, named?: string): Pile {
   const pile = mustPile(pileId)
   const pages = pilePages(pileId)
   const rows: PileInput['pages'] = pages.map((p) => ({ id: p.id, index: p.pileIndex ?? p.originPage ?? 0, ref: refOf(p) }))
   // The named assignment wins; before it is named, the codes suggest one, and a code naming one never set up waits as unnamed.
-  const a = getAssignment(pile.assignment ?? pileAssignment(rows) ?? '') ?? null
-  const result = settlePile(a ? { pages: rows, assignment: a, ...contextFor(a) } : { pages: rows, assignment: null, sides: [], printed: [], filed: new Map(), roster: [], turnedIn: new Set() })
+  const a = getAssignment(named ?? pile.assignment ?? pileAssignment(rows) ?? '') ?? null
+  const base = { pages: rows, pageCount: pile.pages }
+  const result = settlePile(a ? { ...base, assignment: a, ...contextFor(a) } : { ...base, assignment: null, sides: [], printed: [], filed: new Map(), roster: [], turnedIn: new Set() })
   applyDecisions(pile, result)
   const settled = getPile(pileId)!
   broadcast('pile', settled)
@@ -26,7 +31,7 @@ export function settle(pileId: number): Pile {
 }
 
 /** What the pure settle needs to know about an assignment beyond the pile itself. */
-function contextFor(a: Assignment): Omit<PileInput, 'pages' | 'assignment'> {
+function contextFor(a: Assignment): Omit<PileInput, 'pages' | 'pageCount' | 'assignment'> {
   const filed = new Map<string, Set<string>>()
   for (const pk of packetsForAssignment(a.code)) {
     const sides = packetPages(pk.student, a.code).map((p) => `${p.page}${p.side}`)
@@ -51,7 +56,7 @@ export function applyDecisions(pile: Pile, result: SettleResult): void {
   for (const d of result.decisions) {
     if (d.kind === 'hold') {
       held.push({ sheet: d.sheet, pages: d.pageIds, why: d.why, guesses: d.guesses.map((g) => ({ ...g, studentName: getStudent(g.student)?.name ?? g.student })) })
-      for (const id of d.pageIds) if (id != null && inReview(id)) updatePage(id, { reason: 'held' })
+      for (const id of d.pageIds) if (id != null && inReview(id)) updatePage(id, { reason: d.why })
       continue
     }
     if (!inReview(d.pageId)) continue // filed or set aside before this settle
@@ -71,21 +76,25 @@ export function applyDecisions(pile: Pile, result: SettleResult): void {
   }
   // No codes to go by: every sheet waits on the check screen under the packet's suggested student (§1.6).
   if (result.packets) {
+    const why = 'no codes to go by: sheets are cut into packets in order'
     const sheets = pairSheets(pile.pages, !!result.twoSided)
     const byIndex = new Map(pilePages(pile.id).map((p) => [p.pileIndex, p]))
     for (const pk of result.packets) {
       pk.sheets.forEach((n, i) => {
         const [fi, bi] = sheets[n - 1]
-        const ids = [byIndex.get(fi)?.id ?? null, bi == null ? null : (byIndex.get(bi)?.id ?? null)].filter((id): id is number => id != null)
+        // as settlePile gives them: front first, [0] is the back only when the front is absent
+        const front = byIndex.get(fi)?.id ?? null
+        const back = bi == null ? null : (byIndex.get(bi)?.id ?? null)
+        const ids = [front, back].filter((id): id is number => id != null)
         if (!ids.length) return
         const name = pk.student ? (getStudent(pk.student)?.name ?? pk.student) : null
         held.push({
           sheet: n,
           pages: [ids[0], ids[1] ?? null],
-          why: 'no codes to go by: sheets are cut into packets in order',
+          why,
           guesses: pk.student && name ? [{ student: pk.student, studentName: name, page: i + 1, why: `${name} has not turned this in yet` }] : [],
         })
-        for (const id of ids) if (inReview(id)) updatePage(id, { reason: 'held' })
+        for (const id of ids) if (inReview(id)) updatePage(id, { reason: why })
       })
     }
   }
@@ -99,14 +108,16 @@ export function applyDecisions(pile: Pile, result: SettleResult): void {
   })
 }
 
-/** The teacher names the pile's assignment; the pile is settled afresh under it. */
+/**
+ * The teacher names the pile's assignment; the pile is settled afresh under it, with whatever pages
+ * it has. This is also the way out for a pile that never reached its page count.
+ */
 export function namePile(pileId: number, assignment: string): Pile {
-  const pile = mustPile(pileId)
+  mustPile(pileId)
   const code = assignment.trim().toUpperCase()
   if (!getAssignment(code)) throw new Error(`no assignment ${code}`)
   if (pilePages(pileId).some((p) => p.status !== 'review')) throw new Error('this pile has filed pages; undo it before naming it again')
-  updatePile(pileId, { assignment: code })
-  return settle(pileId)
+  return settle(pileId, code)
 }
 
 /** Files a held sheet as the given student's sheet: its front as side a, its back as side b. */

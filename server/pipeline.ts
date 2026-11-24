@@ -6,7 +6,7 @@ import { ARCHIVE_DIR, DATA_DIR, HOLDING_DIR, INBOX_DIR, INCOMPLETE_AFTER_MIN, OR
 import { decodePage, makeThumb } from './decode.js'
 import { closePacketIncomplete, deletePacket, getAssignment, getPile, getPileByOrigin, getStudent, insertPage, insertPile, upsertAssignment, moveAnnotations, nextSeq, openPackets, packetPages, pilePages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
 import { broadcast } from './events.js'
-import type { Assignment, Packet, Page, PageRef, Side } from '../shared/types.js'
+import type { Assignment, Packet, Page, PageRef, Pile, Side } from '../shared/types.js'
 import { shortSide } from './codes.js'
 
 const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.tif', '.tiff', '.webp', '.bmp'])
@@ -28,7 +28,8 @@ export async function processInboxFile(file: string): Promise<string[]> {
   await processImage(file, path.basename(file), from, from?.pile ?? null)
   if (from?.pile) {
     const pile = getPile(from.pile.id)
-    if (pile && pilePages(pile.id).length === pile.pages) {
+    // only a pile not yet settled settles by itself; a settled one changes only by the teacher's hand
+    if (pile && unsettled(pile) && pilePages(pile.id).length === pile.pages) {
       // loaded here, not at the top: pileFiling files through this module
       const { settle } = await import('./pileFiling.js')
       settle(pile.id)
@@ -58,8 +59,11 @@ function originOf(file: string): (Origin & { pile: PileSlot | null }) | null {
   const origin = rel(pdf)
   const index = Number(m[2])
   const pile = getPileByOrigin(origin)
-  const free = pile && index >= 1 && index <= pile.pages && !pilePages(pile.id).some((p) => p.pileIndex === index)
+  const free = pile && unsettled(pile) && index >= 1 && index <= pile.pages && !pilePages(pile.id).some((p) => p.pileIndex === index)
   return { origin, originPage: index, pile: free ? { id: pile.id, index } : null }
+}
+function unsettled(pile: Pile) {
+  return pile.status === 'new' && !pile.settledAt
 }
 /** Forgets which rendered pages came from which PDF, as a restart does. For tests. */
 export function forgetRendered() {
@@ -80,7 +84,11 @@ function originalsPath(file: string) {
 // install) into the inbox as JPEGs named after the PDF, then moves the PDF to
 // originals/ so the scan itself is never lost.
 async function splitPdf(file: string): Promise<string[]> {
-  const stem = path.basename(file, path.extname(file))
+  // Pages are named after the PDF as it will be kept (scan001-2 when scan001 is taken), so a page
+  // left over from before a restart finds its own PDF and pile by name.
+  fs.mkdirSync(ORIGINALS_DIR, { recursive: true })
+  const kept = originalsPath(file)
+  const stem = path.basename(kept, path.extname(kept))
   const out: string[] = []
   try {
     const doc = mupdf.Document.openDocument(fs.readFileSync(file), 'application/pdf')
@@ -101,8 +109,6 @@ async function splitPdf(file: string): Promise<string[]> {
       out.push(dest)
     }
     doc.destroy()
-    fs.mkdirSync(ORIGINALS_DIR, { recursive: true })
-    const kept = originalsPath(file)
     fs.renameSync(file, kept)
     const pile = insertPile({ origin: rel(kept), name: path.basename(file), pages: n })
     out.forEach((f, i) => rendered.set(f, { origin: rel(kept), originPage: i + 1, pile: { id: pile.id, index: i + 1 } }))
