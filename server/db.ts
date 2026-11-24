@@ -339,6 +339,11 @@ export function getPile(id: number): Pile | undefined {
   const r = getDb().prepare('SELECT * FROM piles WHERE id = ?').get(id)
   return r ? pileRow(r) : undefined
 }
+/** The latest pile made from this kept PDF (relative to the data dir). */
+export function getPileByOrigin(origin: string): Pile | undefined {
+  const r = getDb().prepare('SELECT * FROM piles WHERE origin = ? ORDER BY id DESC LIMIT 1').get(origin)
+  return r ? pileRow(r) : undefined
+}
 export function listPiles(limit = 50): Pile[] {
   return (getDb().prepare('SELECT * FROM piles ORDER BY id DESC LIMIT ?').all(limit) as any[]).map(pileRow)
 }

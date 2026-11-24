@@ -226,7 +226,7 @@ export interface ReviewItem {
 }
 
 export interface FeedEvent {
-  type: 'page' | 'review' | 'packet' | 'status' | 'hello' | 'analysis'
+  type: 'page' | 'review' | 'packet' | 'status' | 'hello' | 'analysis' | 'pile'
   at: string
   payload: unknown
 }

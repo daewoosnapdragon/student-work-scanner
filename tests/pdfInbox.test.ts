@@ -46,7 +46,9 @@ describe('a PDF from the scanner', () => {
       pages.push(db.reviewPages().at(-1)!)
     }
     expect(pages.map((p) => [p.origin, p.originPage])).toEqual([['originals/scan001.pdf', 1], ['originals/scan001.pdf', 2]])
-    expect(pages[0].reason).toBe('Code not readable')
+    // held in their pile; with no codes the pile waits to be named, and the pages wait in it
+    expect(pages.map((p) => p.reason)).toEqual(['in pile', 'in pile'])
+    expect(db.listPiles()[0]).toMatchObject({ origin: 'originals/scan001.pdf', pages: 2, status: 'new', assignment: null })
   })
   it('does not overwrite an earlier original of the same name', async () => {
     const pdf = await writePdf('scan001.pdf', 1)

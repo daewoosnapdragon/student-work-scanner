@@ -4,7 +4,7 @@ import sharp from 'sharp'
 import * as mupdf from 'mupdf'
 import { ARCHIVE_DIR, DATA_DIR, HOLDING_DIR, INBOX_DIR, INCOMPLETE_AFTER_MIN, ORIGINALS_DIR, PDF_DPI, THUMBS_DIR } from './config.js'
 import { decodePage, makeThumb } from './decode.js'
-import { closePacketIncomplete, deletePacket, getAssignment, getStudent, insertPage, upsertAssignment, moveAnnotations, nextSeq, openPackets, packetPages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
+import { closePacketIncomplete, deletePacket, getAssignment, getPile, getPileByOrigin, getStudent, insertPage, insertPile, upsertAssignment, moveAnnotations, nextSeq, openPackets, packetPages, pilePages, refreshPacket, reviewPages, updatePage, getPage } from './db.js'
 import { broadcast } from './events.js'
 import type { Assignment, Packet, Page, PageRef, Side } from '../shared/types.js'
 import { shortSide } from './codes.js'
@@ -18,22 +18,34 @@ export function isScanFile(file: string) {
 
 // One file from the inbox. A PDF is rendered to one JPEG per page, which are
 // returned so the caller can process them next, in page order. An image is
-// decoded and filed straight away.
+// decoded and filed straight away; a page rendered from a PDF is held in its
+// pile, and the pile is settled once its last page has been decoded.
 export async function processInboxFile(file: string): Promise<string[]> {
   const ext = path.extname(file).toLowerCase()
   if (ext === '.pdf') return splitPdf(file)
   if (!IMAGE_EXT.has(ext)) return []
-  await processImage(file, path.basename(file), originOf(file))
+  const from = originOf(file)
+  await processImage(file, path.basename(file), from, from?.pile ?? null)
+  if (from?.pile) {
+    const pile = getPile(from.pile.id)
+    if (pile && pilePages(pile.id).length === pile.pages) {
+      // loaded here, not at the top: pileFiling files through this module
+      const { settle } = await import('./pileFiling.js')
+      settle(pile.id)
+    }
+  }
   return []
 }
 
 export interface Origin { origin: string; originPage: number }
+export interface PileSlot { id: number; index: number }
 
-// Which PDF a rendered page came from. Pages rendered in this run are
-// remembered by path; one left in the inbox from before a restart is matched
-// to its PDF by name, since the rendered name is the PDF's plus __pNN.
-const rendered = new Map<string, Origin>()
-function originOf(file: string): Origin | null {
+// Which PDF (and pile) a rendered page came from. Pages rendered in this run
+// are remembered by path; one left in the inbox from before a restart is
+// matched to its PDF by name, since the rendered name is the PDF's plus __pNN,
+// and rejoins that PDF's pile unless the pile already has a page at that place.
+const rendered = new Map<string, Origin & { pile: PileSlot | null }>()
+function originOf(file: string): (Origin & { pile: PileSlot | null }) | null {
   const known = rendered.get(file)
   if (known) {
     rendered.delete(file)
@@ -42,7 +54,16 @@ function originOf(file: string): Origin | null {
   const m = /^(.+)__p(\d{2,})\.jpe?g$/i.exec(path.basename(file))
   if (!m) return null
   const pdf = path.join(ORIGINALS_DIR, `${m[1]}.pdf`)
-  return fs.existsSync(pdf) ? { origin: rel(pdf), originPage: Number(m[2]) } : null
+  if (!fs.existsSync(pdf)) return null
+  const origin = rel(pdf)
+  const index = Number(m[2])
+  const pile = getPileByOrigin(origin)
+  const free = pile && index >= 1 && index <= pile.pages && !pilePages(pile.id).some((p) => p.pileIndex === index)
+  return { origin, originPage: index, pile: free ? { id: pile.id, index } : null }
+}
+/** Forgets which rendered pages came from which PDF, as a restart does. For tests. */
+export function forgetRendered() {
+  rendered.clear()
 }
 
 // A free name under originals/: the PDF's own, or with -2, -3 … when a scanner
@@ -83,7 +104,8 @@ async function splitPdf(file: string): Promise<string[]> {
     fs.mkdirSync(ORIGINALS_DIR, { recursive: true })
     const kept = originalsPath(file)
     fs.renameSync(file, kept)
-    out.forEach((f, i) => rendered.set(f, { origin: rel(kept), originPage: i + 1 }))
+    const pile = insertPile({ origin: rel(kept), name: path.basename(file), pages: n })
+    out.forEach((f, i) => rendered.set(f, { origin: rel(kept), originPage: i + 1, pile: { id: pile.id, index: i + 1 } }))
     console.log(`[pdf] ${path.basename(file)}: ${n} page${n === 1 ? '' : 's'}, kept as ${rel(kept)}`)
     return out
   } catch (err) {
@@ -106,7 +128,9 @@ async function processImageAsReview(file: string, sourceName: string, reason: st
   broadcast('review', p)
 }
 
-export async function processImage(file: string, sourceName: string, from: Origin | null = null): Promise<Page> {
+// With `pile`, the page is only decoded and held (status 'review', reason
+// 'in pile'): its pile files it when the whole pile is in.
+export async function processImage(file: string, sourceName: string, from: Origin | null = null, pile: PileSlot | null = null): Promise<Page> {
   const at = new Date().toISOString()
   const seq = nextSeq()
   let decoded
@@ -126,6 +150,17 @@ export async function processImage(file: string, sourceName: string, from: Origi
   const thumbPath = fs.existsSync(thumbAbs) ? rel(thumbAbs) : null
 
   const ref = decoded.ref
+  if (pile) {
+    const dest = path.join(HOLDING_DIR, `${seq}-${sourceName}`)
+    fs.renameSync(file, dest)
+    const p = insertPage({
+      status: 'review', student: ref?.student ?? null, assignment: ref?.assignment ?? null, page: ref?.page ?? null, side: ref?.side ?? null,
+      scannedAt: at, seq, sourceName, filePath: rel(dest), thumbPath, width: decoded.width, height: decoded.height, decoded: decoded.text,
+      reason: 'in pile', filedFrom: null, origin: from?.origin ?? null, originPage: from?.originPage ?? null, pile: pile.id, pileIndex: pile.index,
+    })
+    broadcast('review', p)
+    return p
+  }
   const problem = ref ? placementProblem(ref) : decoded.text ? `Code read as "${decoded.text}" but it is not one of ours` : 'Code not readable'
 
   if (ref && !problem) {
