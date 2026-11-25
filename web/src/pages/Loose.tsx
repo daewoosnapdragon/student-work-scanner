@@ -14,7 +14,8 @@ interface AssignmentDetail { assignment: Assignment; expected: number; students:
 // the label says and apply it to the selected pages.
 export default function Loose() {
   const nav = useNavigate()
-  const { data, error } = useFetch<ReviewData>('/api/review')
+  const [bump, setBump] = useState(0)
+  const { data, error } = useFetch<ReviewData>('/api/review', bump)
   const [assignment, setAssignment] = useState('')
   const [detail, setDetail] = useState<AssignmentDetail | null>(null)
   const [placements, setPlacements] = useState<Placements>(new Map())
@@ -115,6 +116,26 @@ export default function Loose() {
     })
   }
 
+  // Delete the selected tray pages, to be scanned again. Asks first.
+  async function deleteSelected() {
+    const ids = [...selected].filter((id) => byId.has(id) && !placements.has(id))
+    if (!ids.length || busy) return
+    const all = ids.length === tray.length
+    if (!window.confirm(`Delete ${all && ids.length > 1 ? 'all ' : ''}${ids.length} page${ids.length === 1 ? '' : 's'}? ${ids.length === 1 ? 'It leaves' : 'They leave'} the tray, so you can scan ${ids.length === 1 ? 'it' : 'them'} again.`)) return
+    setBusy(true)
+    setNote(null)
+    try {
+      const r = await post<{ deleted: number[] }>('/api/review/delete', { ids })
+      setSelected(new Set())
+      setNote(r.deleted.length < ids.length ? `${r.deleted.length} deleted; ${ids.length - r.deleted.length} had been filed meanwhile and were left alone.` : null)
+      setBump((b) => b + 1)
+    } catch (e) {
+      setNote((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function fileAll() {
     if (!detail || !placements.size || busy) return
     setBusy(true)
@@ -139,6 +160,7 @@ export default function Loose() {
       if (e.key === 'Escape') setSelected(new Set())
       else if (e.key === '/' && typedRef.current) { e.preventDefault(); typedRef.current.focus() }
       else if ((e.key === 'a' || e.key === 'A') && (e.metaKey || e.ctrlKey)) { e.preventDefault(); setSelected(new Set(tray.map((p) => p.id))) }
+      else if ((e.key === 'Delete' || e.key === 'Backspace') && selected.size) { e.preventDefault(); void deleteSelected() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -200,10 +222,11 @@ export default function Loose() {
       {pages.length > 0 && (
         <section className="card" onDragOver={(e) => { e.preventDefault(); setOver('tray') }} onDragLeave={() => setOver(null)} onDrop={(e) => { setOver(null); setPlacements((pl) => unplace(pl, dropped(e))) }} style={{ borderColor: over === 'tray' ? 'var(--accent)' : undefined, borderStyle: over === 'tray' ? 'dashed' : undefined }}>
           <div className="between">
-            <div className="over">The tray, in scan order <span className="muted small" style={{ textTransform: 'none', letterSpacing: 0, marginLeft: 8 }}><kbd className="key">Esc</kbd> clear selection · <kbd className="key">{/Mac/.test(navigator.platform) ? '⌘' : 'Ctrl'}</kbd><kbd className="key">A</kbd> select all</span></div>
+            <div className="over">The tray, in scan order <span className="muted small" style={{ textTransform: 'none', letterSpacing: 0, marginLeft: 8 }}><kbd className="key">Esc</kbd> clear selection · <kbd className="key">{/Mac/.test(navigator.platform) ? '⌘' : 'Ctrl'}</kbd><kbd className="key">A</kbd> select all · <kbd className="key">Del</kbd> delete selected</span></div>
             <div className="row" style={{ gap: 8 }}>
               {tray.length > 0 && <button className="btn" onClick={() => setSelected(new Set(tray.map((p) => p.id)))}>Select all</button>}
               {selected.size > 0 && <button className="btn" onClick={() => setSelected(new Set())}>Clear selection</button>}
+              {selected.size > 0 && <button className="btn" disabled={busy} onClick={() => void deleteSelected()} style={{ color: 'var(--accent)', borderColor: 'var(--accent)' }} title="Remove the selected pages from the tray, to scan them again">{busy ? 'Deleting' : `Delete ${selected.size === tray.length && tray.length > 1 ? 'all ' : ''}${selected.size}`}</button>}
             </div>
           </div>
           <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'flex-start', minHeight: 60 }}>

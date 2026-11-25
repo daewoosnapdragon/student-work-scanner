@@ -309,3 +309,46 @@ describe('scan and pile routes: final review fixes', () => {
     expect(await scanRow(id)).toMatchObject({ arriving: false })
   })
 })
+
+describe('deleting loose pages', () => {
+  const loose = (n: number) => {
+    const ids: number[] = []
+    for (let i = 0; i < n; i++) {
+      ids.push(db.insertPage({
+        status: 'review', student: null, assignment: null, page: null, side: null, scannedAt: new Date().toISOString(), seq: db.nextSeq(),
+        sourceName: `loose${i}.jpg`, filePath: `holding/loose${i}.jpg`, thumbPath: null, width: null, height: null, decoded: null,
+        reason: 'Code not readable', filedFrom: null, pile: null, pileIndex: null,
+      }).id)
+    }
+    return ids
+  }
+
+  it('deletes the loose pages named, and leaves the rest in the tray', async () => {
+    const [a, b, c] = loose(3)
+    const r = await post('/api/review/delete', { ids: [a, c] })
+    expect(r.status).toBe(200)
+    expect(r.body.deleted).toEqual([a, c])
+    expect(db.getPage(a)!.status).toBe('skipped')
+    expect(db.getPage(c)!.status).toBe('skipped')
+    expect(db.getPage(b)!.status).toBe('review')
+    const tray = (await get('/api/review')).body.items.map((i: any) => i.pageId)
+    expect(tray).toContain(b)
+    expect(tray).not.toContain(a)
+    expect(tray).not.toContain(c)
+  })
+
+  it('leaves alone a page that is filed or part of a pile', async () => {
+    const [free] = loose(1)
+    const [inPile, filed] = loose(2)
+    db.updatePage(inPile, { pile: 999 })
+    db.updatePage(filed, { status: 'filed' })
+    const r = await post('/api/review/delete', { ids: [free, inPile, filed, 123456] })
+    expect(r.body.deleted).toEqual([free])
+    expect(db.getPage(inPile)!.status).toBe('review')
+    expect(db.getPage(filed)!.status).toBe('filed')
+  })
+
+  it('refuses an empty request', async () => {
+    expect((await post('/api/review/delete', { ids: [] })).status).toBe(400)
+  })
+})
