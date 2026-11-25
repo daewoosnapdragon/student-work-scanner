@@ -35,3 +35,17 @@ export function connectionMessage(err: unknown): string {
   const deepest = chain[chain.length - 1]
   return `Could not reach the Claude API: ${deepest?.message ?? 'connection error'}${code ? ` (${code})` : ''}.`
 }
+
+/** A pasted key without the quotes, spaces, line breaks or "ANTHROPIC_API_KEY=" that came with it. */
+export function cleanKey(raw: string): string {
+  return raw.replace(/\s+/g, '').replace(/^ANTHROPIC_API_KEY=/i, '').replace(/^["']+|["']+$/g, '')
+}
+
+/** Why Anthropic turned the saved key away, with only its ends shown. */
+export function authMessage(key: string | null): string {
+  const k = key ?? ''
+  if (k.startsWith('sk-ant-admin')) return 'The key in Settings is an admin key, which cannot analyse work. Make an ordinary API key at console.anthropic.com (Settings → API keys) and paste that.'
+  if (k.startsWith('sk-ant-') && !k.startsWith('sk-ant-api')) return 'The key in Settings is not an API key (API keys start with sk-ant-api). Make one at console.anthropic.com (Settings → API keys) and paste it in Settings.'
+  if (!k.startsWith('sk-ant-api')) return 'The key in Settings does not look like an Anthropic API key: those start with sk-ant-api. Copy it again from console.anthropic.com (Settings → API keys).'
+  return `Anthropic rejected the API key ${k.slice(0, 10)}…${k.slice(-4)}: it was deleted, or only part of it was copied. Find a key ending in ${k.slice(-4)} at console.anthropic.com (Settings → API keys); if there is none, make a new key and paste it in Settings.`
+}
