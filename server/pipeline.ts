@@ -425,6 +425,21 @@ export function skipAllInReview(notWork = false): number {
   return pages.length
 }
 
+// Loose pages the teacher deletes (to scan them again): they leave the tray and
+// the scan log, the way a skipped page does. Only loose pages: a filed page or a
+// pile's page is left as it is. The scanned PDF they came from is still kept.
+export function deleteLoosePages(ids: number[]): number[] {
+  const deleted: number[] = []
+  for (const id of ids) {
+    const p = getPage(id)
+    if (!p || p.status !== 'review' || p.pile != null) continue
+    updatePage(id, { status: 'skipped', reason: 'Deleted from loose pages' })
+    deleted.push(id)
+  }
+  if (deleted.length) broadcast('review', { deleted: deleted.length })
+  return deleted
+}
+
 function duplicateOf(ref: PageRef): Page | undefined {
   return packetPages(ref.student, ref.assignment).find((p) => p.page === ref.page && p.side === ref.side)
 }

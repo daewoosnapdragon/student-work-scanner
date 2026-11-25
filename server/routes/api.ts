@@ -10,7 +10,7 @@ import {
 } from '../db.js'
 import { broadcast, subscribe } from '../events.js'
 import { guessesFor } from '../guesses.js'
-import { abs, fileFromReview, pileArriving, reorderPacket, skipAllInReview, skipFromReview, unfilePage } from '../pipeline.js'
+import { abs, deleteLoosePages, fileFromReview, pileArriving, reorderPacket, skipAllInReview, skipFromReview, unfilePage } from '../pipeline.js'
 import { codeAssignmentOf, openPilesFor, piles as pileRoutes, pileSheets, rosterFor } from './piles.js'
 import { settle } from '../pileFiling.js'
 import { buildPdf } from '../pdf.js'
@@ -495,6 +495,13 @@ function autoFiledThisWeek() {
 
 api.post('/review/skip-all', (req, res) => {
   res.json({ skipped: skipAllInReview(!!req.body?.notWork) })
+})
+
+// Loose pages deleted, one or many at once, to be scanned again.
+api.post('/review/delete', (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? (req.body.ids as unknown[]).map(Number).filter(Number.isFinite) : []
+  if (!ids.length) return res.status(400).json({ error: 'no pages to delete' })
+  res.json({ deleted: deleteLoosePages(ids) })
 })
 
 api.post('/review/:id/file', (req, res) => {
