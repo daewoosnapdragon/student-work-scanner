@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import fs from 'node:fs'
 import path from 'node:path'
 import { DB_PATH } from './config.js'
-import type { Anchor, Assignment, DomainRating, Packet, Page, Progress, RatedBy, Side, Student } from '../shared/types.js'
+import type { Anchor, Assignment, DomainRating, HeldSheet, Packet, Page, Pile, Progress, RatedBy, Side, Student } from '../shared/types.js'
 import type { Annotation, AnnotationKind } from '../shared/annotations.js'
 import { expectedSides } from './codes.js'
 import { formatExpect, parseExpect } from '../shared/types.js'
@@ -80,6 +80,20 @@ function migrate(d: DatabaseSync) {
     note TEXT,
     PRIMARY KEY (student, assignment)
   );
+  CREATE TABLE IF NOT EXISTS piles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    origin TEXT NOT NULL,
+    name TEXT NOT NULL,
+    assignment TEXT,
+    pages INTEGER NOT NULL,
+    sheets INTEGER,
+    twoSided INTEGER,
+    status TEXT NOT NULL DEFAULT 'new',
+    held TEXT,
+    mode TEXT,
+    createdAt TEXT NOT NULL,
+    settledAt TEXT
+  );
   CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
   CREATE TABLE IF NOT EXISTS skills (
     student TEXT NOT NULL,
@@ -134,7 +148,13 @@ function migrate(d: DatabaseSync) {
   const pgcols = (d.prepare('PRAGMA table_info(pages)').all() as Array<{ name: string }>).map((c) => c.name)
   if (!pgcols.includes('origin')) d.exec('ALTER TABLE pages ADD COLUMN origin TEXT')
   if (!pgcols.includes('originPage')) d.exec('ALTER TABLE pages ADD COLUMN originPage INTEGER')
+  if (!pgcols.includes('pile')) d.exec('ALTER TABLE pages ADD COLUMN pile INTEGER')
+  if (!pgcols.includes('pileIndex')) d.exec('ALTER TABLE pages ADD COLUMN pileIndex INTEGER')
+  d.exec('CREATE INDEX IF NOT EXISTS pages_pile ON pages(pile, pileIndex)')
+  const pilecols = (d.prepare('PRAGMA table_info(piles)').all() as Array<{ name: string }>).map((c) => c.name)
+  if (!pilecols.includes('mode')) d.exec('ALTER TABLE piles ADD COLUMN mode TEXT')
   const pcols = (d.prepare('PRAGMA table_info(packets)').all() as Array<{ name: string }>).map((c) => c.name)
+  if (!pcols.includes('feedbackPrintedAt')) d.exec('ALTER TABLE packets ADD COLUMN feedbackPrintedAt TEXT')
   if (!pcols.includes('feedback')) d.exec('ALTER TABLE packets ADD COLUMN feedback TEXT')
   if (!pcols.includes('analysedAt')) d.exec('ALTER TABLE packets ADD COLUMN analysedAt TEXT')
   if (!pcols.includes('corrections')) d.exec('ALTER TABLE packets ADD COLUMN corrections TEXT')
@@ -220,6 +240,17 @@ export function refreshPacketsFor(assignment: string) {
 export function deletePacket(student: string, assignment: string) {
   getDb().prepare('DELETE FROM packets WHERE student = ? AND assignment = ?').run(student, assignment)
 }
+/**
+ * A packet that lost its last page: deleted when it carries nothing, kept (counting 0 sides) when it holds
+ * a score, note, feedback, analysis, corrections or criteria. A packet that still has pages is just recounted.
+ */
+export function emptyOrDeletePacket(student: string, assignment: string) {
+  const pk = getPacket(student, assignment)
+  if (!pk) return
+  const bare = pk.score == null && pk.note == null && pk.feedback == null && pk.analysedAt == null && pk.corrections == null && pk.criteria == null
+  if (bare && packetPages(student, assignment).length === 0) deletePacket(student, assignment)
+  else refreshPacket(student, assignment, new Date().toISOString())
+}
 /** Remove an assignment that has no work filed under it. Returns false when pages or packets exist. */
 export function deleteAssignment(code: string): boolean {
   const d = getDb()
@@ -255,14 +286,21 @@ export function nextSeq(): number {
 export function insertPage(p: Omit<Page, 'id'>): Page {
   const r = getDb()
     .prepare(
-      `INSERT INTO pages (status,student,assignment,page,side,scannedAt,seq,sourceName,filePath,thumbPath,width,height,decoded,reason,filedFrom,origin,originPage)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO pages (status,student,assignment,page,side,scannedAt,seq,sourceName,filePath,thumbPath,width,height,decoded,reason,filedFrom,origin,originPage,pile,pileIndex)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       p.status, p.student, p.assignment, p.page, p.side, p.scannedAt, p.seq, p.sourceName, p.filePath,
-      p.thumbPath, p.width, p.height, p.decoded, p.reason, p.filedFrom, p.origin ?? null, p.originPage ?? null,
+      p.thumbPath, p.width, p.height, p.decoded, p.reason, p.filedFrom, p.origin ?? null, p.originPage ?? null, p.pile ?? null, p.pileIndex ?? null,
     )
-  return { ...p, origin: p.origin ?? null, originPage: p.originPage ?? null, id: Number(r.lastInsertRowid) }
+  return { ...p, origin: p.origin ?? null, originPage: p.originPage ?? null, pile: p.pile ?? null, pileIndex: p.pileIndex ?? null, id: Number(r.lastInsertRowid) }
+}
+export function pilePages(pileId: number): Page[] {
+  return getDb().prepare('SELECT * FROM pages WHERE pile = ? ORDER BY pileIndex').all(pileId) as unknown as Page[]
+}
+/** Every page a pile's PDF gave: those still in the pile, and those gone loose or set aside from it (which keep their origin). */
+export function pagesOfPileOrOrigin(pileId: number, origin: string): Page[] {
+  return getDb().prepare('SELECT * FROM pages WHERE pile = ? OR origin = ? ORDER BY seq').all(pileId, origin) as unknown as Page[]
 }
 export function updatePage(id: number, patch: Partial<Page>) {
   const keys = Object.keys(patch) as Array<keyof Page>
@@ -303,6 +341,39 @@ export function hasSide(student: string, assignment: string, page: number, side:
     .prepare("SELECT 1 FROM pages WHERE student=? AND assignment=? AND page=? AND side=? AND status='filed' LIMIT 1")
     .get(student, assignment, page, side)
   return !!r
+}
+
+// ---------- piles ----------
+function pileRow(r: any): Pile {
+  return { ...r, mode: r.mode ?? null, held: r.held ? (JSON.parse(r.held) as HeldSheet[]) : [] }
+}
+export function insertPile(p: { origin: string; name: string; pages: number }): Pile {
+  const r = getDb()
+    .prepare('INSERT INTO piles (origin,name,pages,status,createdAt) VALUES (?,?,?,?,?)')
+    .run(p.origin, p.name, p.pages, 'new', new Date().toISOString())
+  return getPile(Number(r.lastInsertRowid))!
+}
+export function getPile(id: number): Pile | undefined {
+  const r = getDb().prepare('SELECT * FROM piles WHERE id = ?').get(id)
+  return r ? pileRow(r) : undefined
+}
+/** The latest pile made from this kept PDF (relative to the data dir). */
+export function getPileByOrigin(origin: string): Pile | undefined {
+  const r = getDb().prepare('SELECT * FROM piles WHERE origin = ? ORDER BY id DESC LIMIT 1').get(origin)
+  return r ? pileRow(r) : undefined
+}
+export function listPiles(limit = 50): Pile[] {
+  return (getDb().prepare('SELECT * FROM piles ORDER BY id DESC LIMIT ?').all(limit) as any[]).map(pileRow)
+}
+export function updatePile(id: number, patch: Partial<Omit<Pile, 'id' | 'held'>> & { held?: HeldSheet[] }) {
+  const keys = Object.keys(patch) as Array<keyof typeof patch>
+  if (!keys.length) return
+  const sets = keys.map((k) => `${k} = ?`).join(', ')
+  const vals = keys.map((k) => (k === 'held' ? JSON.stringify(patch.held ?? []) : (patch as any)[k]))
+  getDb().prepare(`UPDATE piles SET ${sets} WHERE id = ?`).run(...vals, id)
+}
+export function markFeedbackPrinted(assignment: string, at: string) {
+  getDb().prepare('UPDATE packets SET feedbackPrintedAt = ? WHERE assignment = ?').run(at, assignment)
 }
 
 // ---------- packets ----------

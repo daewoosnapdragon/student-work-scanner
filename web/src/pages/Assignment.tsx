@@ -1,15 +1,18 @@
 import { useState, useEffect } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { post, useFetch, fmtDate, fileUrl, sideLabel, type Assignment, type Packet, type Page, type Student } from '../api'
 import { formatExpect, parseCorrectionLines, parseCorrections, parseCriteria, parseExpect, type Anchor, type Rubric, type Side } from '../../../shared/types'
 import { del, put } from '../api'
 import ProgressRow from '../components/ProgressRow'
 import { ScanLink, type ViewerPage } from '../components/Viewer'
 import AgreementCard, { type Agreement } from '../components/AgreementCard'
+import More from '../components/More'
+import { nextAction, type Stage } from './stage'
 
 interface Row extends Student { packet: Packet | null; pages: Page[] }
 interface Rating { student: string; assignment: string; domain: string; level: number; note: string | null; claudeLevel: number | null; by: 'claude' | 'teacher' | null }
-interface Data { assignment: Assignment; expected: number; /** Every side printed, whether or not it comes back. */ printed: Array<{ page: number; side: Side }>; students: Row[]; inReview: number; average: number | null; scoredCount: number; noticing: { text: string; at: string } | null; analysisOn: boolean; domains: string[]; allDomains: string[]; rubric: Rubric; ratings: Rating[]; anchors: Anchor[]; agreement: Agreement }
+interface HubRow { code: string; stage: Stage; turnedIn: number; toCheck: number; missingSide: number; pileId: number | null }
+interface Data { assignment: Assignment; pileId: number | null; expected: number; /** Every side printed, whether or not it comes back. */ printed: Array<{ page: number; side: Side }>; students: Row[]; inReview: number; average: number | null; scoredCount: number; noticing: { text: string; at: string } | null; analysisOn: boolean; domains: string[]; allDomains: string[]; rubric: Rubric; ratings: Rating[]; anchors: Anchor[]; agreement: Agreement }
 const LEVEL_NAME: Record<number, string> = { 4: 'Strong', 3: 'Secure', 2: 'Developing', 1: 'Beginning' }
 const LEVEL_BG: Record<number, string> = { 4: '#dff0e5', 3: '#eef5e9', 2: '#fff3d6', 1: '#f8dcd8' }
 const shortDomain = (d: string) => d.split(':')[0].trim()
@@ -23,8 +26,18 @@ export default function AssignmentPage() {
   const [open, setOpen] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [pasting, setPasting] = useState(false)
+  const [params] = useSearchParams()
+  const [promptOpen, setPromptOpen] = useState(params.get('prompt') === '1')
+  const [rubricOpen, setRubricOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const navigate = useNavigate()
+  const { data: hub } = useFetch<HubRow[]>('/api/assignments', bump)
   const { data: queue } = useFetch<QueueStatus>('/api/analyse')
   const [analyseErr, setAnalyseErr] = useState<string | null>(null)
+  // ?prompt=1 (the hub's Copy prompt): once the page has loaded, bring the prompt panel into view
+  const wantPrompt = params.get('prompt') === '1'
+  const loaded = !!data
+  useEffect(() => { if (wantPrompt && loaded) document.getElementById('prompt')?.scrollIntoView({ block: 'start' }) }, [wantPrompt, loaded])
   if (error) return <main><p className="err">{error}</p></main>
   if (!data) return <main><p className="muted">Loading</p></main>
   const a = data.assignment
@@ -38,11 +51,38 @@ export default function AssignmentPage() {
   const active = mine.filter((j) => j.state === 'waiting' || j.state === 'running')
   const failed = mine.filter((j) => j.state === 'failed')
   const analysed = inRows.filter((r) => r.packet!.analysedAt).length
-  async function analyseAll(force = false) {
+  async function analyseAll(force = false, closeIncomplete = false) {
+    if (busy) return
+    setBusy(true)
     try {
       setAnalyseErr(null)
-      await post(`/api/analyse/assignment/${a.code}`, { force })
+      await post(`/api/analyse/assignment/${a.code}`, closeIncomplete ? { force, closeIncomplete: true } : { force })
+    } catch (e) {
+      setAnalyseErr((e as Error).message)
+    } finally {
+      setBusy(false)
       setBump((b) => b + 1)
+    }
+  }
+  const row = hub?.find((h) => h.code === a.code) ?? null
+  const act = row ? nextAction({ ...row, code: a.code, analysisOn: data.analysisOn }) : null
+  // the confirm and the closeIncomplete flag are the hub's, so the same click does the same thing in both places
+  function analysePrimary() {
+    const miss = row?.missingSide ?? 0
+    if (miss > 0 && !window.confirm(miss === 1 ? '1 packet is missing a side. Analyse it as it is?' : `${miss} packets are missing a side. Analyse them as they are?`)) return
+    void analyseAll(false, miss > 0)
+  }
+  // one red button on the page: whichever open form owns it, else the header's primary action
+  const formOwner = editing ? 'edit' : rubricOpen ? 'rubric' : pasting ? 'paste' : selected ? 'packet' : null
+  const headCls = formOwner ? 'btn' : 'btn primary'
+  const toTop = () => window.scrollTo({ top: 0 })
+  const toId = (id: string) => document.getElementById(id)?.scrollIntoView({ block: 'start' })
+  async function remove() {
+    if (!window.confirm(`Delete ${a.code} · ${a.title}? Nothing has been scanned for it. Pages printed with this code would then land in loose pages.`)) return
+    try {
+      setAnalyseErr(null)
+      await del(`/api/assignments/${a.code}`)
+      navigate('/assignments')
     } catch (e) {
       setAnalyseErr((e as Error).message)
     }
@@ -58,50 +98,57 @@ export default function AssignmentPage() {
         </p>
         <div className="row">
           {a.tags && <><span className="over quiet" style={{ fontSize: 10, marginRight: 4 }}>Tags</span>{a.tags.split(',').map((t) => t.trim()).filter(Boolean).map((t) => <span key={t} className="chip">{t}</span>)}</>}
-          <button className="btn" style={{ marginLeft: 'auto' }} onClick={() => setEditing((v) => !v)}>{editing ? 'Cancel' : 'Edit'}</button>
-          <a className="btn" href={`/print/labels/${a.code}`} target="_blank" rel="noreferrer">Print labels</a>
-          <Link className="btn" to={`/compare?assignment=${a.code}`}>Compare</Link>
+          <span className="row" style={{ marginLeft: 'auto', gap: 8 }}>
+            {act && act.label !== 'Open' && (
+              act.kind === 'analyse' ? <button className={headCls} disabled={busy || active.length > 0} onClick={analysePrimary}>{active.length > 0 ? `Analysing… ${active.length} to go` : act.label}</button>
+                : act.kind === 'print' ? <a className={headCls} href={act.to} target="_blank" rel="noreferrer">{act.label}</a>
+                : act.label === 'Copy prompt' ? <button className={headCls} onClick={() => { setPromptOpen(true); setTimeout(() => toId('prompt'), 0) }}>{act.label}</button>
+                : <Link className={headCls} to={act.to}>{act.label}</Link>
+            )}
+            <More>
+              <button type="button" onClick={() => { setEditing(true); toTop() }}>Edit</button>
+              <a href={`/print/labels/${a.code}`} target="_blank" rel="noreferrer">Print labels</a>
+              {inRows.length > 0 && <a href={`/api/assignments/${a.code}/pdf?download=1`}>Class PDF</a>}
+              {inRows.length > 0 && <a href={`/print/overview/${a.code}`} target="_blank" rel="noreferrer">Print record</a>}
+              {inRows.length > 0 && <button type="button" onClick={() => { setPromptOpen(true); setTimeout(() => toId('prompt'), 0) }}>Copy prompt</button>}
+              {inRows.length > 0 && <button type="button" onClick={() => { setPasting(true); setTimeout(() => toId('paste'), 0) }}>Paste class answer</button>}
+              <button type="button" onClick={() => { setRubricOpen(true); setTimeout(() => toId('rubric'), 0) }}>Edit rubric</button>
+              {inRows.length > 0 && data.rubric.scoring !== 'none' && <button type="button" onClick={() => toId('anchors')}>Scoring anchors</button>}
+              <Link to="/settings#advanced" title="The domains are set in Settings, under Advanced">Domains</Link>
+              <Link to={`/compare?assignment=${a.code}`}>Compare two students</Link>
+              {data.analysisOn && analysed > 0 && active.length === 0 && <button type="button" onClick={() => { if (window.confirm(`Analyse all ${inRows.length} packets again? Existing analysis and feedback are replaced.`)) void analyseAll(true) }}>Analyse everything again</button>}
+              {inRows.some((r) => r.packet!.feedback) && act?.kind !== 'print' && <a href={`/print/feedback/${a.code}`} target="_blank" rel="noreferrer">Feedback slips</a>}
+              {inRows.length === 0 && <button type="button" className="more-danger" onClick={() => void remove()}>Delete</button>}
+            </More>
+          </span>
         </div>
-        {editing && <EditForm a={a} printed={data.printed} onDone={() => { setEditing(false); setBump((b) => b + 1) }} />}
+        {analyseErr && inRows.length === 0 && <p className="err" style={{ margin: 0 }}>{analyseErr}</p>}
+        {editing && <EditForm primary={formOwner === 'edit'} a={a} printed={data.printed} onDone={() => { setEditing(false); setBump((b) => b + 1) }} />}
       </section>
 
       <section className="stats">
         <div className="stat"><div className="over quiet">Turned in</div><div className="num">{inRows.length}<small> of {data.students.length}</small></div></div>
         <div className="stat"><div className="over quiet">Complete</div><div className="num">{complete.length}</div><div className="muted small">{data.expected} side{data.expected === 1 ? '' : 's'} each</div></div>
         <div className="stat"><div className="over quiet">Class average</div><div className="num">{data.average != null ? data.average.toFixed(1) : '—'}{data.average != null && scoreOf != null && <small> of {scoreOf}</small>}</div><div className="muted small">{data.scoredCount} scored</div></div>
-        <div className="stat"><div className="over quiet">In review</div><div className="num"><Link to="/review">{data.inReview}</Link></div></div>
+        <div className="stat"><div className="over quiet">To check</div><div className="num">{data.pileId != null ? <Link to={`/scan/pile/${data.pileId}`}>{row?.toCheck ?? data.inReview}</Link> : 0}</div></div>
       </section>
 
-      <RubricCard key={`${a.code}:${JSON.stringify(data.rubric)}`} a={a} rubric={data.rubric} allDomains={data.allDomains} onSaved={() => setBump((b) => b + 1)} />
+      <RubricCard primary={formOwner === 'rubric'} key={`${a.code}:${JSON.stringify(data.rubric)}`} a={a} rubric={data.rubric} allDomains={data.allDomains} open={rubricOpen} setOpen={setRubricOpen} onSaved={() => { setRubricOpen(false); setBump((b) => b + 1) }} />
 
       {inRows.length > 0 && (
         <section className="col" style={{ gap: 10 }}>
-          <div className="row" style={{ gap: 10 }}>
-            {data.analysisOn ? (
-              <>
-                <button className="btn primary" onClick={() => void analyseAll(false)} disabled={active.length > 0} title={analysed < inRows.length ? `Read the ${inRows.length - analysed} packet${inRows.length - analysed === 1 ? '' : 's'} not yet analysed, then write the class summary` : 'Every packet has been analysed; this rewrites the class summary'}>
-                  {active.length > 0 ? `Analysing ${active.filter((j) => j.state === 'running')[0]?.student ?? ''}… ${active.length} to go` : analysed < inRows.length ? `Analyse ${inRows.length - analysed === inRows.length ? 'all' : `the ${inRows.length - analysed} new`} with Claude` : 'Rewrite the class summary'}
-                </button>
-                {analysed > 0 && active.length === 0 && <button className="btn" onClick={() => { if (window.confirm(`Analyse all ${inRows.length} packets again? Existing analysis and feedback are replaced.`)) void analyseAll(true) }}>Analyse everything again</button>}
-              </>
-            ) : (
-              <Link className="btn primary" to="/settings" title="Add a Claude API key and the analysis runs here">Switch on analysis</Link>
-            )}
-            <a className="btn" href={`/api/assignments/${a.code}/pdf?download=1`} title="Every student's pages, in name order, one PDF">Class PDF</a>
-            <a className="btn" href={`/print/overview/${a.code}`} target="_blank" rel="noreferrer" title="For your records: the domain table, then every student's notes and feedback">Print record</a>
-            <CopyPrompt code={a.code} />
-          <button className="btn" onClick={() => setPasting((v) => !v)} title="Paste Claude's whole answer once; it is split by student code">{pasting ? 'Cancel paste' : 'Paste class answer'}</button>
-          {inRows.some((r) => r.packet!.feedback) && <a className="btn" href={`/print/feedback/${a.code}`} target="_blank" rel="noreferrer" title="Every student's note, two slips to a page, to print and hand back with the work">Feedback slips</a>}
-          </div>
-          <div className="muted small">{data.analysisOn ? `${analysed} of ${inRows.length} packets analysed.` : 'Without a key:'} Class PDF and Copy prompt go to Claude by hand, and Paste class answer brings the reply back.</div>
+          {data.analysisOn
+            ? <div className="muted small">{active.length > 0 ? `Analysing ${active.filter((j) => j.state === 'running')[0]?.student ?? ''}… ${active.length} to go. ` : ''}{analysed} of {inRows.length} packets analysed.</div>
+            : <div className="notice">Analysis is off. Add a Claude API key in <Link to="/settings">Settings</Link> and this page can analyse the packets.</div>}
           {analyseErr && <p className="err" style={{ margin: 0 }}>{analyseErr}</p>}
           {failed.length > 0 && <div className="notice" style={{ borderColor: 'var(--accent)' }}>{failed.length} analysis job{failed.length === 1 ? '' : 's'} failed: {failed[0].error}</div>}
         </section>
       )}
-      {pasting && <PasteAnswer code={a.code} onDone={() => { setPasting(false); setBump((b) => b + 1) }} />}
+      {promptOpen && <PromptPanel code={a.code} onClose={() => setPromptOpen(false)} />}
+      {pasting && <PasteAnswer primary={formOwner === 'paste'} code={a.code} onDone={() => { setPasting(false); setBump((b) => b + 1) }} />}
 
       {inRows.length > 0 && data.rubric.scoring !== 'none' && (
-        <section className="col" style={{ gap: 10 }}>
+        <section id="anchors" className="col" style={{ gap: 10 }}>
           <div className="between">
             <div className="over">Scoring anchors</div>
             <div className="muted small">{data.anchors.length ? 'Claude scores every other packet by comparison with these.' : 'Score two or three packets yourself and mark them as anchors; Claude then scores the rest by comparison, in your terms.'}</div>
@@ -145,7 +192,7 @@ export default function AssignmentPage() {
       </section>
 
       {selected && selected.packet && (
-        <PacketPanel key={`${selected.code}:${selected.packet.analysedAt ?? ''}:${data.ratings.filter((r) => r.student === selected.code).map((r) => r.level).join('')}`} s={selected} a={a} onSaved={() => setBump((b) => b + 1)} analysisOn={data.analysisOn} busyJob={active.some((j) => j.student === selected.code)} domains={data.domains} ratings={data.ratings.filter((r) => r.student === selected.code)} anchor={data.anchors.find((an) => an.student === selected.code) ?? null} rubric={data.rubric} />
+        <PacketPanel primary={formOwner === 'packet'} key={`${selected.code}:${selected.packet.analysedAt ?? ''}:${data.ratings.filter((r) => r.student === selected.code).map((r) => r.level).join('')}`} s={selected} a={a} onSaved={() => setBump((b) => b + 1)} analysisOn={data.analysisOn} busyJob={active.some((j) => j.student === selected.code)} domains={data.domains} ratings={data.ratings.filter((r) => r.student === selected.code)} anchor={data.anchors.find((an) => an.student === selected.code) ?? null} rubric={data.rubric} />
       )}
 
       {(data.agreement.score || data.agreement.domains.length > 0) && (
@@ -172,10 +219,9 @@ export default function AssignmentPage() {
       </section>
 
       {inRows.length > 0 && (
-        <section className="col sep" style={{ gap: 12 }}>
+        <section id="overview" className="col sep" style={{ gap: 12 }}>
           <div className="between">
             <div><span className="serif" style={{ fontSize: 26, fontWeight: 700 }}>Overview</span> <span className="muted small" style={{ marginLeft: 8 }}>every student by domain, 1 to 4</span></div>
-            <div className="row"><a className="btn" href={`/print/overview/${a.code}`} target="_blank" rel="noreferrer">Print record</a><Link className="btn" to="/settings" title="The domains are set in Settings">Domains</Link></div>
           </div>
           <Overview rows={sorted} domains={data.domains} ratings={data.ratings} onPick={(code) => setOpen(code)} />
         </section>
@@ -184,7 +230,7 @@ export default function AssignmentPage() {
   )
 }
 
-function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings, anchor, rubric }: { s: Row; a: Assignment; onSaved: () => void; analysisOn: boolean; busyJob: boolean; domains: string[]; ratings: Rating[]; anchor: Anchor | null; rubric: Rubric }) {
+function PacketPanel({ primary, s, a, onSaved, analysisOn, busyJob, domains, ratings, anchor, rubric }: { primary: boolean; s: Row; a: Assignment; onSaved: () => void; analysisOn: boolean; busyJob: boolean; domains: string[]; ratings: Rating[]; anchor: Anchor | null; rubric: Rubric }) {
   const p = s.packet!
   const [anchoring, setAnchoring] = useState(false)
   const [levels, setLevels] = useState<Record<string, number>>(Object.fromEntries(ratings.map((r) => [r.domain, r.level])))
@@ -235,7 +281,7 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings, anc
     }
   }
   async function unfile(pg: Page) {
-    if (!window.confirm(`Send ${sideLabel(pg.page, pg.side)} back to Review? It leaves ${s.name}'s packet and can be filed under someone else there.`)) return
+    if (!window.confirm(`Send ${sideLabel(pg.page, pg.side)} to loose pages? It leaves ${s.name}'s packet and can be filed under someone else there.`)) return
     try {
       setErr(null)
       await post(`/api/pages/${pg.id}/unfile`, {})
@@ -268,8 +314,8 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings, anc
       <div className="between">
         <div><Link to={`/students/${s.code}`} className="serif" style={{ fontSize: 22, fontWeight: 700, color: 'var(--ink)' }}>{s.name}</Link> <span className="muted small" style={{ marginLeft: 8 }}>{s.code} · {p.sides} of {p.expected} sides{p.closedIncomplete ? ', filed incomplete' : ''} · last page {fmtDate(p.lastAt)}</span></div>
         <div className="row">
-          {analysisOn && <button className="btn primary" disabled={busyJob} onClick={() => void analyseOne()} title={p.analysedAt ? `Analysed ${fmtDate(p.analysedAt)}; read it again` : 'Read these pages with Claude'}>{busyJob ? 'Analysing…' : p.analysedAt ? 'Analyse again' : 'Analyse'}</button>}
-          {rubric.scoring !== 'none' && <button className={`btn ${anchor ? 'primary' : ''}`} onClick={() => setAnchoring((v) => !v)} title={anchor ? 'This packet is a scoring anchor; change or remove it' : 'Score this packet yourself and make it an example of that score for Claude'}>{anchor ? `Anchor · ${anchor.score}` : 'Make an anchor'}</button>}
+          {analysisOn && <button className="btn" disabled={busyJob} onClick={() => void analyseOne()} title={p.analysedAt ? `Analysed ${fmtDate(p.analysedAt)}; read it again` : 'Read these pages with Claude'}>{busyJob ? 'Analysing…' : p.analysedAt ? 'Analyse again' : 'Analyse'}</button>}
+          {rubric.scoring !== 'none' && <button className="btn" onClick={() => setAnchoring((v) => !v)} title={anchor ? 'This packet is a scoring anchor; change or remove it' : 'Score this packet yourself and make it an example of that score for Claude'}>{anchor ? `Anchor · ${anchor.score}` : 'Make an anchor'}</button>}
           <a className="btn" href={`/api/packets/${a.code}/${s.code}/pdf?download=1`} title="This student's pages as one PDF">PDF</a>
           {p.feedback && <a className="btn" href={`/print/feedback/${a.code}/${s.code}`} target="_blank" rel="noreferrer" title="The note to this student, as a slip to print or save as PDF">Feedback slip</a>}
           <Link className="btn" to={`/compare?assignment=${a.code}&left=${s.code}`}>Compare</Link>
@@ -284,14 +330,14 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings, anc
               <span className="row" style={{ gap: 2 }}>
                 <button className="btn" style={{ padding: '1px 6px' }} disabled={i === 0 || moving} onClick={() => void move(i, -1)} title="Move this page earlier" aria-label="Move earlier">‹</button>
                 <button className="btn" style={{ padding: '1px 6px' }} disabled={i === pages.length - 1 || moving} onClick={() => void move(i, 1)} title="Move this page later" aria-label="Move later">›</button>
-                <button className="btn" style={{ padding: '1px 6px' }} onClick={() => void unfile(pg)} title="Not this student's page: send it back to Review" aria-label="Send back to review">×</button>
+                <button className="btn" style={{ padding: '1px 6px' }} onClick={() => void unfile(pg)} title="Not this student's page: send it to loose pages, to be filed under someone else" aria-label="Send to loose pages">×</button>
               </span>
             </span>
           </div>
         ))}
       </div>
-      <div className="muted small">Pages out of order? The arrows move a page; sides are renumbered by position. × sends a page back to Review.</div>
-      {anchoring && <AnchorForm a={a} s={s} anchor={anchor} rubric={rubric} onDone={() => { setAnchoring(false); onSaved() }} />}
+      <div className="muted small">Pages out of order? The arrows move a page; sides are renumbered by position. × sends a page to loose pages.</div>
+      {anchoring && <AnchorForm primary={primary} a={a} s={s} anchor={anchor} rubric={rubric} onDone={() => { setAnchoring(false); onSaved() }} />}
       {parseCriteria(p.criteria).length > 0 && (
         <div className="row" style={{ gap: 6 }}>
           <span className="over quiet" style={{ fontSize: 10, marginRight: 4 }}>Criteria</span>
@@ -318,7 +364,7 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings, anc
           <label className="row"><span className="over quiet" style={{ fontSize: 10 }}>Score</span><input type="number" step="0.5" min={0} value={score} onChange={(e) => { setScore(e.target.value); setScoreTouched(true); setSaved(false) }} style={{ width: 70 }} title={p.scoreBy === 'teacher' ? `Your score${p.claudeScore != null ? `; Claude gave ${p.claudeScore}` : ''}` : p.scoreBy === 'claude' ? 'Claude\'s score. Type here to make it yours.' : undefined} /></label>
           {p.scoreBy === 'teacher' && p.claudeScore != null && p.claudeScore !== p.score && <span className="muted small" title="Claude's score is kept beside yours for the agreement check">Claude gave {p.claudeScore}</span>}
           <label className="row"><span className="over quiet" style={{ fontSize: 10 }}>of</span><input type="number" step="1" min={1} value={of} onChange={(e) => { setOf(e.target.value); setSaved(false) }} style={{ width: 70 }} /></label>
-          <button type="submit" className="btn primary" style={{ marginLeft: 'auto' }}>Save</button>
+          <button type="submit" className={`btn ${primary && !anchoring ? 'primary' : ''}`} style={{ marginLeft: 'auto' }}>Save</button>
           {saved && <span className="muted small">Saved</span>}
           {err && <span className="err">{err}</span>}
         </div>
@@ -349,7 +395,7 @@ function PacketPanel({ s, a, onSaved, analysisOn, busyJob, domains, ratings, anc
 }
 
 // The teacher's own score for this packet, kept as an example of that score. Every other packet is then scored against the anchors.
-function AnchorForm({ a, s, anchor, rubric, onDone }: { a: Assignment; s: Row; anchor: Anchor | null; rubric: Rubric; onDone: () => void }) {
+function AnchorForm({ primary, a, s, anchor, rubric, onDone }: { primary: boolean; a: Assignment; s: Row; anchor: Anchor | null; rubric: Rubric; onDone: () => void }) {
   const of = rubric.scoring === 'outOf' && rubric.scoreOf ? rubric.scoreOf : 4
   const [score, setScore] = useState(anchor ? String(anchor.score) : s.packet!.score != null ? String(s.packet!.score) : '')
   const [note, setNote] = useState(anchor?.note ?? '')
@@ -379,7 +425,7 @@ function AnchorForm({ a, s, anchor, rubric, onDone }: { a: Assignment; s: Row; a
         <label className="col" style={{ gap: 4, flex: 1, minWidth: 260 }}><span className="over quiet" style={{ fontSize: 10 }}>What makes it a {score || '…'} · in your words, one line</span>
           <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="every section done, two clear events, verbs mostly right" />
         </label>
-        <button type="submit" className="btn primary">{anchor ? 'Save' : 'Make anchor'}</button>
+        <button type="submit" className={`btn ${primary ? 'primary' : ''}`}>{anchor ? 'Save' : 'Make anchor'}</button>
         {anchor && <button type="button" className="btn" onClick={() => void remove()}>Remove anchor</button>}
         {err && <span className="err">{err}</span>}
       </div>
@@ -408,7 +454,7 @@ function ScoreTable({ rows }: { rows: Row[] }) {
 }
 
 
-function EditForm({ a, printed, onDone }: { a: Assignment; printed: Array<{ page: number; side: Side }>; onDone: () => void }) {
+function EditForm({ primary, a, printed, onDone }: { primary: boolean; a: Assignment; printed: Array<{ page: number; side: Side }>; onDone: () => void }) {
   const [f, setF] = useState({ title: a.title, klass: a.klass, grade: a.grade == null ? '' : String(a.grade), assignedOn: a.assignedOn ?? '', sheets: a.sheets, twoSided: !!a.twoSided, sides: a.sides == null ? '' : String(a.sides), tags: a.tags })
   // which printed sides come back to be scanned; all of them unless some were unticked (a reading page stays with the student)
   const [back, setBack] = useState<Set<string>>(() => new Set((parseExpect(a.expect).length ? parseExpect(a.expect) : printed).map((e) => `${e.page}${e.side}`)))
@@ -457,12 +503,12 @@ function EditForm({ a, printed, onDone }: { a: Assignment; printed: Array<{ page
         </div>
       )}
       {err && <p className="err" style={{ margin: 0 }}>{err}</p>}
-      <div className="row"><button type="submit" className="btn primary">Save</button><button type="button" className="btn" onClick={onDone}>Cancel</button></div>
+      <div className="row"><button type="submit" className={`btn ${primary ? 'primary' : ''}`}>Save</button><button type="button" className="btn" onClick={onDone}>Cancel</button></div>
     </form>
   )
 }
 
-function CopyPrompt({ code }: { code: string }) {
+function PromptPanel({ code, onClose }: { code: string; onClose: () => void }) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle')
   async function copy() {
     try {
@@ -475,15 +521,21 @@ function CopyPrompt({ code }: { code: string }) {
     setTimeout(() => setState('idle'), 2500)
   }
   return (
-    <span className="row" style={{ gap: 6 }}>
-      <button className="btn" onClick={() => void copy()} title="A prompt for Claude naming the assignment and every student by code, shaped so the answer pastes straight back">Copy prompt</button>
-      {state === 'copied' && <span className="muted small">Copied. Paste it into Claude with the PDF.</span>}
-      {state === 'failed' && <a className="small" href={`/api/assignments/${code}/prompt`} target="_blank" rel="noreferrer">Open the prompt instead</a>}
-    </span>
+    <section id="prompt" className="card" style={{ gap: 10 }}>
+      <div className="over quiet">Copy prompt</div>
+      <div className="muted small">A prompt for Claude naming the assignment and every student by code, shaped so the answer pastes straight back. Send it with the Class PDF, then use Paste class answer.</div>
+      <div className="row">
+        <button className="btn" onClick={() => void copy()}>Copy prompt</button>
+        <a className="btn" href={`/api/assignments/${code}/pdf?download=1`}>Class PDF</a>
+        <button className="btn" onClick={onClose}>Close</button>
+        {state === 'copied' && <span className="muted small">Copied. Paste it into Claude with the PDF.</span>}
+        {state === 'failed' && <a className="small" href={`/api/assignments/${code}/prompt`} target="_blank" rel="noreferrer">Open the prompt instead</a>}
+      </div>
+    </section>
   )
 }
 
-function PasteAnswer({ code, onDone }: { code: string; onDone: () => void }) {
+function PasteAnswer({ primary, code, onDone }: { primary: boolean; code: string; onDone: () => void }) {
   const [text, setText] = useState('')
   const [result, setResult] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -498,11 +550,11 @@ function PasteAnswer({ code, onDone }: { code: string; onDone: () => void }) {
     }
   }
   return (
-    <section className="card" style={{ gap: 10 }}>
+    <section id="paste" className="card" style={{ gap: 10 }}>
       <div className="over quiet">Paste Claude's whole answer</div>
       <div className="muted small">Each part that starts with a student's code goes to that student, split into the Teacher part and the Feedback part; a part headed Class goes to What the class shows. Anything already there for those students is replaced.</div>
       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={12} placeholder={'## 4S18 Lee Yoona\n### Teacher\n…\n### Feedback\n…\n\n## Class\n…'} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
-      <div className="row"><button className="btn primary" disabled={!text.trim()} onClick={() => void send()}>File it</button>{result && <span className="small">{result}</span>}{err && <span className="err">{err}</span>}</div>
+      <div className="row"><button className={`btn ${primary ? 'primary' : ''}`} disabled={!text.trim()} onClick={() => void send()}>File it</button>{result && <span className="small">{result}</span>}{err && <span className="err">{err}</span>}</div>
     </section>
   )
 }
@@ -524,7 +576,7 @@ function ClassAnalysis({ a, onSaved }: { a: Assignment; onSaved: () => void }) {
   return (
     <form className="col" style={{ gap: 8 }} onSubmit={(e) => { e.preventDefault(); void save() }}>
       <textarea value={text} onChange={(e) => { setText(e.target.value); setSaved(false) }} rows={text ? Math.min(18, text.split('\n').length + 2) : 4} placeholder="What the whole class shows: paste the Class part of Claude's answer, or write your own." style={{ width: '100%', font: 'inherit', fontSize: 13.5, lineHeight: 1.5, padding: '10px 12px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
-      <div className="row"><button type="submit" className="btn primary">Save</button>{saved && <span className="muted small">Saved</span>}{err && <span className="err">{err}</span>}</div>
+      <div className="row"><button type="submit" className="btn">Save</button>{saved && <span className="muted small">Saved</span>}{err && <span className="err">{err}</span>}</div>
     </form>
   )
 }
@@ -556,8 +608,7 @@ function Overview({ rows, domains, ratings, onPick }: { rows: Row[]; domains: st
 }
 
 
-function RubricCard({ a, rubric, allDomains, onSaved }: { a: Assignment; rubric: Rubric; allDomains: string[]; onSaved: () => void }) {
-  const [open, setOpen] = useState(false)
+function RubricCard({ primary, a, rubric, allDomains, open, setOpen, onSaved }: { primary: boolean; a: Assignment; rubric: Rubric; allDomains: string[]; open: boolean; setOpen: (v: boolean) => void; onSaved: () => void }) {
   const [r, setR] = useState<Rubric>(rubric)
   const [criteria, setCriteria] = useState(rubric.criteria.join('\n'))
   const [focus, setFocus] = useState(rubric.focus.join(', '))
@@ -566,7 +617,7 @@ function RubricCard({ a, rubric, allDomains, onSaved }: { a: Assignment; rubric:
   const chosen = r.domains ?? allDomains
   const summary = [
     rubric.criteria.length ? `${rubric.criteria.length} criteria` : rubric.propose ? 'criteria from the worksheet' : 'no criteria',
-    `${(rubric.domains ?? allDomains).length} of ${allDomains.length} domains`,
+    (rubric.domains ?? allDomains).length === allDomains.length ? `${allDomains.length} domains` : `${(rubric.domains ?? allDomains).length} of ${allDomains.length} domains`,
     rubric.focus.length ? `focus: ${rubric.focus.join(', ')}` : null,
     { warm: 'warm', plain: 'plain', playful: 'playful' }[rubric.tone] + ', ' + { short: 'short', standard: 'standard', full: 'full' }[rubric.length] + ' notes',
     rubric.scoring === 'none' ? 'no score' : rubric.scoring === 'outOf' ? `score out of ${rubric.scoreOf}` : 'score 1 to 4',
@@ -585,12 +636,11 @@ function RubricCard({ a, rubric, allDomains, onSaved }: { a: Assignment; rubric:
   const toggleDomain = (d: string) => setR({ ...r, domains: chosen.includes(d) ? chosen.filter((x) => x !== d) : allDomains.filter((x) => x === d || chosen.includes(x)) })
   const ta = { width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' as const }
   return (
-    <section className="card" style={{ gap: 12, padding: '14px 18px' }} data-testid="rubric">
+    <section id="rubric" className="card" style={{ gap: 12, padding: '10px 18px' }} data-testid="rubric">
       <div className="between">
-        <div><span className="over">Rubric</span> <span className="muted small" style={{ marginLeft: 10 }}>{summary}</span></div>
-        <button className="btn" onClick={() => setOpen((v) => !v)}>{open ? 'Close' : 'Edit rubric'}</button>
+        <div className="small"><span className="over">Rubric:</span> <span className="muted" style={{ marginLeft: 6 }}>{summary}</span></div>
+        <button className="btn" onClick={() => setOpen(!open)}>{open ? 'Close' : 'Edit'}</button>
       </div>
-      {!open && <div className="muted small">What the analysis checks and how it writes, for this assignment. Used by Analyse with Claude and by Copy prompt.</div>}
       {open && (
         <form className="col" style={{ gap: 14 }} onSubmit={(e) => { e.preventDefault(); void save() }}>
           <div className="grid2" style={{ gap: 16 }}>
@@ -617,7 +667,7 @@ function RubricCard({ a, rubric, allDomains, onSaved }: { a: Assignment; rubric:
             {r.scoring === 'outOf' && <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Out of</span><input type="number" min={1} max={100} value={r.scoreOf ?? ''} onChange={(e) => setR({ ...r, scoreOf: Number(e.target.value) || null })} style={{ width: 70 }} /></label>}
           </div>
           <div className="muted small">The note to the student never mentions the score, whatever is chosen here.</div>
-          <div className="row"><button type="submit" className="btn primary">Save rubric</button>{saved && <span className="muted small">Saved</span>}{err && <span className="err">{err}</span>}</div>
+          <div className="row"><button type="submit" className={`btn ${primary ? 'primary' : ''}`}>Save rubric</button>{saved && <span className="muted small">Saved</span>}{err && <span className="err">{err}</span>}</div>
         </form>
       )}
     </section>

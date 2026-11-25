@@ -45,6 +45,40 @@ export interface Assignment {
   createdAt: string
 }
 
+export type PileStatus = 'new' | 'checking' | 'done' | 'jumbled'
+/** already: set by GET /api/piles/:id when the student has that sheet on file, so filing the guess replaces it */
+export interface HeldGuess { student: string; studentName: string; page: number; why: string; already?: boolean }
+export interface HeldSheet { sheet: number; pages: [number, number | null]; why: string; guesses: HeldGuess[] }
+export interface Pile {
+  id: number
+  origin: string
+  name: string
+  assignment: string | null
+  pages: number
+  sheets: number | null
+  twoSided: number | null
+  status: PileStatus
+  held: HeldSheet[]
+  /** 'packets': no page read a code for the assignment, so the check offers packets in name order (§1.6); null otherwise */
+  mode: 'packets' | null
+  createdAt: string
+  settledAt: string | null
+}
+
+/** Where a sheet of a pile is now: filed, held for the check, gone loose, set aside as not work, or never scanned. */
+export type SheetStatus = 'filed' | 'held' | 'loose' | 'not_work' | 'missing'
+/** One sheet of a pile as the check screen shows it: the pages at its two places and where they are now. */
+export interface SheetRow { sheet: number; front: Page | null; back: Page | null; status: SheetStatus; student: string | null; studentName: string | null }
+/** GET /api/piles/:id: the pile, its sheets, the held ones (with their thumbnails), and in the no-codes case its packets. */
+export interface PileData {
+  pile: Pile
+  assignment: Assignment | null
+  sheets: SheetRow[]
+  held: Array<HeldSheet & { thumbs: [string | null, string | null] }>
+  packets?: Array<{ sheets: number[]; student: string; pages: Page[] }>
+  roster: Student[]
+}
+
 export interface Page {
   id: number
   status: PageStatus
@@ -61,11 +95,14 @@ export interface Page {
   height: number | null
   decoded: string | null // raw QR text if any
   reason: string | null // why it is in review
-  filedFrom: 'code' | 'review' | null
+  filedFrom: 'code' | 'review' | 'pile' | null
   /** The PDF this page was rendered from, relative to the data dir (under originals/); null for a page the scanner saved as an image. */
   origin?: string | null
   /** 1-based page number within that PDF. */
   originPage?: number | null
+  /** The pile (a scanned PDF filed sheet by sheet) this page belongs to, and its 1-based place in it. */
+  pile?: number | null
+  pileIndex?: number | null
   /** How many comments the teacher has pinned to this page; set on lists that show a badge. */
   annotations?: number
 }
@@ -97,6 +134,8 @@ export interface Packet {
   claudeScore: number | null
   /** Who gave the score shown: Claude, or the teacher by hand (which a re-analysis never overwrites). */
   scoreBy: 'claude' | 'teacher' | null
+  /** When the student's feedback slip was last printed; null if never. */
+  feedbackPrintedAt: string | null
 }
 
 export type RatedBy = 'claude' | 'teacher'
@@ -204,7 +243,7 @@ export interface ReviewItem {
 }
 
 export interface FeedEvent {
-  type: 'page' | 'review' | 'packet' | 'status' | 'hello' | 'analysis'
+  type: 'page' | 'review' | 'packet' | 'status' | 'hello' | 'analysis' | 'pile'
   at: string
   payload: unknown
 }

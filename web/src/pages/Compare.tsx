@@ -44,7 +44,7 @@ export default function Compare() {
   return (
     <main style={{ gap: 28 }}>
       <section className="col" style={{ gap: 10 }}>
-        <div className="over">Side by side</div>
+        <div className="over"><Link to="/students">Students</Link> <span className="muted">/</span> Compare</div>
         <h1 className="serif title">Compare</h1>
         <p className="lede">Two students on the same work. Pick the assignment, then the two names.</p>
         {error && <p className="err">{error}</p>}

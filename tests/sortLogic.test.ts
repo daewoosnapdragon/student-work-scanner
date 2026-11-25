@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { batchItems, clashes, cycleSide, place, unplace, type Placements, type SideRef } from '../web/src/pages/sortLogic'
+import { applyTyped, batchItems, clashes, cycleSide, place, unplace, type Placements, type SideRef } from '../web/src/pages/sortLogic'
 
 const sides: SideRef[] = [{ page: 1, side: 'a' }, { page: 1, side: 'b' }, { page: 2, side: 'a' }, { page: 2, side: 'b' }]
 const none = new Set<string>()
@@ -38,5 +38,26 @@ describe('dropping pages on a student', () => {
     p = place(p, [11], 'S07', sides, filedBy.get('S07')!)
     p = cycleSide(cycleSide(cycleSide(p, 11, sides), 11, sides), 11, sides)
     expect(clashes(p)).toEqual([{ student: 'S07', side: '1a' }])
+  })
+})
+
+describe('applying a typed label to the selected pages', () => {
+  it('gives the first page the typed side and the rest the next open sides', () => {
+    const p = applyTyped(new Map(), [10, 11], { student: 'S07', page: 1, side: 'b' }, sides, none)
+    expect(p.get(10)).toEqual({ student: 'S07', page: 1, side: 'b' })
+    expect(p.get(11)).toEqual({ student: 'S07', page: 1, side: 'a' })
+  })
+  it('with a student only, places like a drop', () => {
+    const p = applyTyped(new Map(), [10, 11], { student: 'S07' }, sides, new Set(['1a']))
+    expect(p.get(10)).toEqual({ student: 'S07', page: 1, side: 'b' })
+    expect(p.get(11)).toEqual({ student: 'S07', page: 2, side: 'a' })
+  })
+  it('falls back to the open sides when the typed side is not on this assignment', () => {
+    const p = applyTyped(new Map(), [10], { student: 'S07', page: 9, side: 'a' }, sides, none)
+    expect(p.get(10)).toEqual({ student: 'S07', page: 1, side: 'a' })
+  })
+  it('does nothing with no pages selected', () => {
+    const start = new Map()
+    expect(applyTyped(start, [], { student: 'S07' }, sides, none)).toBe(start)
   })
 })

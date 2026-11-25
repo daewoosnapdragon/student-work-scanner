@@ -115,22 +115,3 @@ describe('guesses for an unreadable page', () => {
     expect(g[0].why).toMatch(/replaces/)
   })
 })
-
-describe('packets that stopped arriving', () => {
-  it('can all be closed as they are in one go, and stay out of review after', async () => {
-    const { closeStalePackets, stalePackets } = await import('../server/pipeline.js')
-    const old = '2026-11-01T01:00:00.000Z'
-    filed('S03', 'W23', 1, 'a', old)
-    filed('S07', 'W23', 1, 'a', old)
-    filed('S04', 'W23', 1, 'a', '2026-11-14T00:30:00.000Z') // fresh: not stale yet
-    const now = Date.parse('2026-11-14T01:00:00.000Z')
-    expect(stalePackets(now).map((p) => p.student).sort()).toEqual(['S03', 'S07'])
-    expect(closeStalePackets(now)).toBe(2)
-    expect(stalePackets(now)).toEqual([])
-    expect(getPacket('S03', 'W23')).toMatchObject({ sides: 1, complete: 1, closedIncomplete: 1 })
-    expect(getPacket('S04', 'W23')).toMatchObject({ complete: 0, closedIncomplete: 0 })
-    // the missing side turning up later still counts
-    filed('S03', 'W23', 1, 'b')
-    expect(getPacket('S03', 'W23')).toMatchObject({ sides: 2 })
-  })
-})

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import type { Assignment, FeedEvent, Guess, Packet, Page, ReviewItem, Student } from '../../shared/types'
+import type { Assignment, FeedEvent, Guess, HeldSheet, Packet, Page, Pile, ReviewItem, Student } from '../../shared/types'
 
-export type { Assignment, Guess, Packet, Page, ReviewItem, Student }
+export type { Assignment, Guess, HeldSheet, Packet, Page, Pile, ReviewItem, Student }
 
 export async function get<T>(url: string): Promise<T> {
   const r = await fetch(url)

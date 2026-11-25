@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { get, post, useFetch } from '../api'
 import AgreementCard, { type Agreement } from '../components/AgreementCard'
 
@@ -23,6 +24,9 @@ export default function SettingsPage() {
   const [msg, setMsg] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
   const { data: agreement } = useFetch<Agreement>('/api/agreement')
+  // /settings#advanced (the assignment page's Domains): open Advanced and bring it into view
+  const advancedOpen = useLocation().hash === '#advanced'
+  useEffect(() => { if (advancedOpen) document.getElementById('advanced')?.scrollIntoView({ block: 'start' }) }, [advancedOpen])
   useEffect(() => { get<Settings>('/api/settings').then((d) => { setS(d); setModel(d.model); setAuto(d.auto); setContext(d.context); setDomains(d.domains.join('\n')); setSkills(d.skills) }) }, [])
 
   async function save(extra: Partial<{ apiKey: string | null; skills: string }> = {}) {
@@ -60,14 +64,10 @@ export default function SettingsPage() {
         <form className="row" style={{ gap: 10 }} onSubmit={(e) => { e.preventDefault(); void save({ apiKey: key }) }}>
           <label htmlFor="key" className="vh">API key</label>
           <input id="key" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={s?.hasKey ? 'Paste a new key to replace the saved one' : 'sk-ant-…'} style={{ flex: 1, minWidth: 280 }} autoComplete="off" />
-          <button type="submit" className="btn primary" disabled={!key.trim()}>Save key</button>
+          <button type="submit" className="btn" disabled={!key.trim()}>Save key</button>
           {s?.hasKey && <button type="button" className="btn" onClick={() => void test()} disabled={testing}>{testing ? 'Testing' : 'Test'}</button>}
           {s?.hasKey && <button type="button" className="btn" onClick={() => { if (window.confirm('Remove the saved key? Analysis stops until a new one is saved.')) void save({ apiKey: null }) }}>Remove</button>}
         </form>
-      </section>
-
-      <section className="card" style={{ gap: 14, padding: 20 }}>
-        <div className="over quiet">How it runs</div>
         <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Model</span>
           <select value={model} onChange={(e) => setModel(e.target.value)}>{MODELS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</select>
         </label>
@@ -76,39 +76,50 @@ export default function SettingsPage() {
         <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>About your class, for Claude</span>
           <textarea value={context} onChange={(e) => setContext(e.target.value)} rows={5} placeholder={'Anything that should shape every analysis. For example: "Grades 1 to 5 at an elementary school in Korea; English is a second language for all of them. Feedback to students should be short, warm, and quote their own words. Mention Korean names only in Korean."'} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
         </label>
-        <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Domains rated 1 to 4, one per line</span>
-          <textarea value={domains} onChange={(e) => setDomains(e.target.value)} rows={6} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
-          <span className="muted small">Every analysis rates each of these, and the assignment's overview table and printed record use them as columns. Keep the names short; a colon separates a name from its detail, as in "Language: grammar and vocabulary".</span>
-        </label>
         <div className="row"><button className="btn primary" onClick={() => void save()}>Save</button>{msg && <span className="small">{msg}</span>}</div>
       </section>
 
-      <section className="card" style={{ gap: 14, padding: 20 }}>
-        <div className="over quiet">Skill names</div>
-        <p className="small" style={{ margin: 0 }}>
-          The analysis names the skills each piece of work shows, and the student page follows them from one assignment to the next. That only works when a skill is always called the same thing, so every name comes from this list: Claude picks from it, a pasted answer is folded onto it, and Worksheet Studio reads it (at <code>/api/skills</code>) to tag worksheets with the same names.
-        </p>
-        <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>One skill a line · <code># Group</code> starts a group · after <code>|</code>, other names for the same skill, comma separated</span>
-          <textarea value={skills} onChange={(e) => setSkills(e.target.value)} rows={18} spellCheck={false} style={{ ...TA, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', fontSize: 12.5, lineHeight: 1.5 }} />
-          <span className="muted small">Renaming a skill here renames it everywhere it has been recorded. The other names matter: "verb agreement" or "she go" in a pasted answer both become "subject-verb agreement".</span>
-        </label>
-        <div className="row">
-          <button className="btn primary" onClick={() => void save()}>Save</button>
-          <button className="btn" onClick={() => { if (window.confirm('Put the default list back? Your edits to the skill names are lost; recorded skills are refiled under the default names.')) void save({ skills: '' }) }}>Reset to default</button>
-          {msg && <span className="small">{msg}</span>}
+      <details id="advanced" className="card" style={{ gap: 14, padding: 20 }} open={advancedOpen || undefined}>
+        <summary style={{ cursor: 'pointer' }}>
+          <span style={{ fontWeight: 600 }}>Advanced</span>
+          <span className="muted small" style={{ display: 'block' }}>Domains, skill names, how Claude's ratings compare, what gets sent.</span>
+        </summary>
+        <div className="col" style={{ gap: 28, marginTop: 14 }}>
+          <section className="col" style={{ gap: 14 }}>
+            <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>Domains rated 1 to 4, one per line</span>
+              <textarea value={domains} onChange={(e) => setDomains(e.target.value)} rows={6} style={{ width: '100%', font: 'inherit', fontSize: 13.5, padding: '8px 10px', border: '1px solid var(--chip)', borderRadius: 3, background: '#fff', resize: 'vertical' }} />
+              <span className="muted small">Every analysis rates each of these, and the assignment's overview table and printed record use them as columns. Keep the names short; a colon separates a name from its detail, as in "Language: grammar and vocabulary".</span>
+            </label>
+            <div className="row"><button className="btn" onClick={() => void save()}>Save</button>{msg && <span className="small">{msg}</span>}</div>
+          </section>
+          <section className="col" style={{ gap: 14 }}>
+            <div className="over quiet">Skill names</div>
+            <p className="small" style={{ margin: 0 }}>
+              The analysis names the skills each piece of work shows, and the student page follows them from one assignment to the next. That only works when a skill is always called the same thing, so every name comes from this list: Claude picks from it, a pasted answer is folded onto it, and Worksheet Studio reads it (at <code>/api/skills</code>) to tag worksheets with the same names.
+            </p>
+            <label className="col" style={{ gap: 4 }}><span className="over quiet" style={{ fontSize: 10 }}>One skill a line · <code># Group</code> starts a group · after <code>|</code>, other names for the same skill, comma separated</span>
+              <textarea value={skills} onChange={(e) => setSkills(e.target.value)} rows={18} spellCheck={false} style={{ ...TA, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', fontSize: 12.5, lineHeight: 1.5 }} />
+              <span className="muted small">Renaming a skill here renames it everywhere it has been recorded. The other names matter: "verb agreement" or "she go" in a pasted answer both become "subject-verb agreement".</span>
+            </label>
+            <div className="row">
+              <button className="btn" onClick={() => void save()}>Save</button>
+              <button className="btn" onClick={() => { if (window.confirm('Put the default list back? Your edits to the skill names are lost; recorded skills are refiled under the default names.')) void save({ skills: '' }) }}>Reset to default</button>
+              {msg && <span className="small">{msg}</span>}
+            </div>
+          </section>
+
+          <section className="col" style={{ gap: 14 }}>
+            <div className="over quiet">How Claude's ratings compare with yours</div>
+            <p className="small" style={{ margin: 0 }}>Across every assignment, wherever you rated a packet's domains by hand or typed its score and Claude read the same packet. This is the one outside check on the analysis: it says how far to trust it, and where Claude leans it is told to correct next time.</p>
+            <AgreementCard ag={agreement} across hint="Nothing to compare yet. On an assignment, open a packet and Rate its domains or type a score; once Claude has read the same packet the comparison appears here." />
+          </section>
+
+          <section className="col" style={{ gap: 8 }}>
+            <div className="over quiet">What gets sent</div>
+            <p className="small" style={{ margin: 0 }}>For each packet: its page images, the student's name and code, the assignment's title and tags, and the text above. For the class summary: the teacher notes already written. Nothing is sent until you add a key, and nothing is sent for packets you do not analyse.</p>
+          </section>
         </div>
-      </section>
-
-      <section className="card" style={{ gap: 14, padding: 20 }}>
-        <div className="over quiet">How Claude's ratings compare with yours</div>
-        <p className="small" style={{ margin: 0 }}>Across every assignment, wherever you rated a packet's domains by hand or typed its score and Claude read the same packet. This is the one outside check on the analysis: it says how far to trust it, and where Claude leans it is told to correct next time.</p>
-        <AgreementCard ag={agreement} across hint="Nothing to compare yet. On an assignment, open a packet and Rate its domains or type a score; once Claude has read the same packet the comparison appears here." />
-      </section>
-
-      <section className="col" style={{ gap: 8 }}>
-        <div className="over quiet">What gets sent</div>
-        <p className="small" style={{ margin: 0 }}>For each packet: its page images, the student's name and code, the assignment's title and tags, and the text above. For the class summary: the teacher notes already written. Nothing is sent until you add a key, and nothing is sent for packets you do not analyse.</p>
-      </section>
+      </details>
     </main>
   )
 }

@@ -1,13 +1,17 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { del, post, useFetch, fmtDate, sideLabel, type Assignment } from '../api'
-import { parseExpect } from '../../../shared/types'
+import { del, post, useFetch, type Assignment } from '../api'
+import { nextAction, stageLine, type Stage } from './stage'
 
-interface Row extends Assignment { turnedIn: number; complete: number; roster: number }
+interface Row extends Assignment {
+  turnedIn: number; complete: number; roster: number; stage: Stage; toCheck: number; missingSide: number; analysed: number
+  notIn: string[]; noticing: { text: string; at: string } | null; pileId: number | null; feedbackPrintedOn: string | null
+}
 
 export default function Assignments() {
   const [bump, setBump] = useState(0)
   const { data, error } = useFetch<Row[]>('/api/assignments', bump)
+  const { data: settings } = useFetch<{ hasKey: boolean }>('/api/settings')
   const { data: classes } = useFetch<{ classes: string[] }>('/api/students')
   const [form, setForm] = useState({ code: '', title: '', klass: '', grade: '', assignedOn: new Date().toISOString().slice(0, 10), sheets: 1, twoSided: true, tags: '' })
   const [err, setErr] = useState<string | null>(null)
@@ -19,13 +23,33 @@ export default function Assignments() {
 
   async function remove(a: Row) {
     if (a.turnedIn > 0) return setErr(`${a.code} has work from ${a.turnedIn} student${a.turnedIn === 1 ? '' : 's'} filed under it, so it stays.`)
-    if (!window.confirm(`Delete ${a.code} · ${a.title}? Nothing has been scanned for it. Labels already printed with this code would land in review.`)) return
+    if (!window.confirm(`Delete ${a.code} · ${a.title}? Nothing has been scanned for it. Pages printed with this code would then land in loose pages.`)) return
     try {
       setErr(null)
       await del(`/api/assignments/${a.code}`)
       setBump((b) => b + 1)
     } catch (e) {
       setErr((e as Error).message)
+    }
+  }
+
+  const [rowErr, setRowErr] = useState<Record<string, string>>({})
+
+  const [busy, setBusy] = useState<string | null>(null)
+
+  async function analyse(a: Row) {
+    if (busy) return
+    if (a.missingSide > 0 && !window.confirm(a.missingSide === 1 ? '1 packet is missing a side. Analyse it as it is?' : `${a.missingSide} packets are missing a side. Analyse them as they are?`)) return
+    setBusy(a.code)
+    try {
+      setRowErr((r) => ({ ...r, [a.code]: '' }))
+      await post(`/api/analyse/assignment/${a.code}`, a.missingSide > 0 ? { closeIncomplete: true } : {})
+      setBump((b) => b + 1)
+    } catch (e) {
+      setRowErr((r) => ({ ...r, [a.code]: (e as Error).message }))
+      setBump((b) => b + 1)
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -41,35 +65,46 @@ export default function Assignments() {
     }
   }
 
+  const analysisOn = !!settings?.hasKey
+  const actions = new Map((shown ?? []).map((a) => [a.code, nextAction({ ...a, analysisOn })]))
+  // one red button on the screen: the first row whose next step is a real job (check, analyse or copy the prompt, print), not just opening
+  const primary = shown?.find((a) => !a.waiting && actions.get(a.code)!.label !== 'Open')?.code
+  const noticed = (data ?? []).filter((a) => a.noticing)
+
   return (
     <main style={{ gap: 28 }}>
       <section className="col" style={{ gap: 10 }}>
-        <div className="over">Everything handed out</div>
+        <div className="over">Assignments</div>
         <h1 className="serif title">Assignments</h1>
-        <p className="lede">Each assignment has a code. Print its labels, stick one on each side, and the scanner files the pages on its own.</p>
+        <p className="lede">Each assignment, where it is, and what comes next.</p>
         {error && <p className="err">{error}</p>}
         {err && !showForm && <p className="err">{err}</p>}
       </section>
 
-      <section style={{ overflowX: 'auto' }}>
-        <table>
-          <thead><tr><th style={{ width: 70 }}>Code</th><th>Title</th><th>Class</th><th style={{ width: 100 }}>Assigned</th><th style={{ width: 120 }}>Sides</th><th style={{ width: 120 }}>Turned in</th><th style={{ width: 100 }}>Complete</th><th style={{ width: 210 }}></th></tr></thead>
-          <tbody>
-            {shown?.map((a) => (
-              <tr key={a.code} style={a.waiting ? { opacity: 0.6 } : undefined}>
-                <td className="muted">{a.code}</td>
-                <td><Link to={`/assignments/${a.code}`} className="name">{a.title}</Link>{a.tags && <div className="kr">{a.tags}</div>}</td>
-                <td>{a.klass}{a.grade != null && <span className="muted"> · G{a.grade}</span>}</td>
-                <td className="muted">{fmtDate(a.assignedOn)}</td>
-                <td>{a.sheets} sheet{a.sheets === 1 ? '' : 's'}{a.twoSided ? ', both sides' : ''}{a.expect && <div className="muted small">{parseExpect(a.expect).map((e) => sideLabel(e.page, e.side)).join(', ')} back</div>}</td>
-                <td>{a.waiting ? <span className="muted">printed, nothing scanned yet</span> : <>{a.turnedIn} of {a.roster}</>}</td>
-                <td>{a.complete}</td>
-                <td className="row"><Link to={`/assignments/${a.code}`} className="btn">Open</Link><a className="btn" href={`/print/labels/${a.code}`} target="_blank" rel="noreferrer">Labels</a>{a.turnedIn === 0 && <button className="btn" onClick={() => void remove(a)} title="Delete this assignment. Only possible while nothing has been scanned for it.">Delete</button>}</td>
-              </tr>
-            ))}
-            {shown && shown.length === 0 && <tr><td colSpan={8} className="muted">{waiting.length ? 'Nothing scanned yet.' : 'No assignments yet. Add the first one below.'}</td></tr>}
-          </tbody>
-        </table>
+      <section className="col" style={{ gap: 0 }}>
+        {shown?.map((a) => {
+          const act = actions.get(a.code)!
+          const cls = a.code === primary && !showForm ? 'btn primary' : 'btn'
+          return (
+            <div key={a.code} className="col" style={{ gap: 4, padding: '12px 0', borderTop: '1px solid var(--chip)', opacity: a.waiting ? 0.6 : 1 }}>
+              <div className="between" style={{ gap: 12, alignItems: 'flex-start' }}>
+                <div className="col" style={{ gap: 2, minWidth: 0 }}>
+                  <div><span className="muted">{a.code}</span> <Link to={`/assignments/${a.code}`} className="name">{a.title}</Link> <span className="muted small">{a.klass}{a.grade != null && ` · G${a.grade}`}</span></div>
+                  <div className="muted small">{a.waiting ? 'Printed, nothing scanned yet' : stageLine(a)}</div>
+                </div>
+                <div className="row" style={{ flexShrink: 0 }}>
+                  {act.kind === 'analyse' ? <button className={cls} disabled={busy !== null} onClick={() => void analyse(a)}>{act.label}</button>
+                    : act.kind === 'print' ? <a className={cls} href={act.to} target="_blank" rel="noreferrer">{act.label}</a>
+                    : <Link className={cls} to={act.to}>{act.label}</Link>}
+                  {a.turnedIn === 0 && <button className="btn" onClick={() => void remove(a)} title="Delete this assignment. Only possible while nothing has been scanned for it.">Delete</button>}
+                </div>
+              </div>
+              {a.notIn.length > 0 && <div className="muted small">not yet in: {a.notIn.slice(0, 5).join(', ')}{a.notIn.length > 5 && ` and ${a.notIn.length - 5} more`}</div>}
+              {rowErr[a.code] && <p className="err" style={{ margin: 0 }}>{rowErr[a.code]}</p>}
+            </div>
+          )
+        })}
+        {shown && shown.length === 0 && <p className="muted">{waiting.length ? 'Nothing scanned yet.' : 'No assignments yet. Add one, or scan a pile and name it.'}</p>}
         {waiting.length > 0 && <p className="muted small" style={{ marginTop: 8 }}>{waiting.length} printed from Worksheet Studio with nothing scanned yet ({waiting.map((a) => a.code).join(', ')}): {showWaiting ? 'shown faint above.' : 'kept out of the list until a page arrives.'} <button className="lnk" onClick={() => setShowWaiting((v) => !v)} style={{ border: 0, background: 'none', color: 'var(--accent)', padding: 0, font: 'inherit', textDecoration: 'underline', cursor: 'pointer' }}>{showWaiting ? 'Hide them' : 'Show them'}</button></p>}
       </section>
 
@@ -100,6 +135,13 @@ export default function Assignments() {
           </form>
         )}
       </section>
+
+      {noticed.length > 0 && (
+        <section className="col sep">
+          <div className="over">Worth noticing</div>
+          {noticed.map((a) => <p key={a.code} style={{ margin: 0 }}>{a.code}: {a.noticing!.text}</p>)}
+        </section>
+      )}
     </main>
   )
 }

@@ -3,14 +3,16 @@ import fs from 'node:fs'
 import path from 'node:path'
 import QRCode from 'qrcode'
 import {
-  allPackets, expectedFor, findStudentsByName, getAssignment, getPacket, getStudent, listAssignments, listStudents,
+  expectedFor, findStudentsByName, getAssignment, getPacket, getStudent, listAssignments, listStudents,
   packetPages, packetsForAssignment, packetsForStudent, pagesForStudent, pagesSince, recentPages, reviewPages,
-  setPacketScore, upsertAssignment, upsertStudent, closePacketIncomplete, getPage, getMeta, metaWithPrefix, sidesFor, printedSidesFor, deleteAssignment,
-  refreshPacketsFor, setAssignmentAnalysis, setPacketFeedback,
+  setPacketScore, upsertAssignment, upsertStudent, closePacketIncomplete, getPage, getMeta, sidesFor, printedSidesFor, deleteAssignment,
+  refreshPacketsFor, setAssignmentAnalysis, setPacketFeedback, listPiles, markFeedbackPrinted, openPackets, pagesOfPileOrOrigin,
 } from '../db.js'
 import { broadcast, subscribe } from '../events.js'
 import { guessesFor } from '../guesses.js'
-import { abs, closeStalePackets, fileFromReview, setupAssignmentFromReview, reorderPacket, skipAllInReview, skipFromReview, stalePackets, unfilePage } from '../pipeline.js'
+import { abs, fileFromReview, pileArriving, reorderPacket, skipAllInReview, skipFromReview, unfilePage } from '../pipeline.js'
+import { codeAssignmentOf, openPilesFor, piles as pileRoutes, pileSheets, rosterFor } from './piles.js'
+import { settle } from '../pileFiling.js'
 import { buildPdf } from '../pdf.js'
 import { classPrompt, splitClassAnswer, splitStudentSection } from '../analysis.js'
 import { enqueueAssignment, enqueueClass, enqueuePacket, getSettings, queueStatus, saveSettings, testKey, domainList, domainsFor, LEVELS, anchorsFor } from '../claude.js'
@@ -24,9 +26,10 @@ import { skillGroups } from '../../shared/skills.js'
 import { formatExpect, parseCorrectionLines, parseCorrections, parseCriteria, parseProgress, parseRubric, progressDirection, DEFAULT_RUBRIC, SKILL_LEVEL_LABEL, type Rubric } from '../../shared/types.js'
 import { watcherStatus } from '../watcher.js'
 import { formatCode, sideLabel } from '../codes.js'
-import type { Assignment, ReviewItem, Side, Student } from '../../shared/types.js'
+import type { Assignment, Packet, Page, ReviewItem, Side, Student } from '../../shared/types.js'
 
 export const api = Router()
+api.use('/piles', pileRoutes)
 
 api.get('/events', (req, res) => subscribe(res))
 
@@ -36,71 +39,51 @@ api.get('/status', (_req, res) => {
   res.json({ ...watcherStatus(), lastSeen: watcherStatus().lastSeen ?? getMeta('lastSeen'), build })
 })
 
-// ---------- Today ----------
-api.get('/today', (_req, res) => {
-  const startOfDay = new Date()
-  startOfDay.setHours(0, 0, 0, 0)
-  const weekAgo = new Date(Date.now() - 7 * 86400_000)
-  const today = pagesSince(startOfDay.toISOString())
-  const week = pagesSince(weekAgo.toISOString())
-  const packets = allPackets()
-  const todayKeys = new Set(today.filter((p) => p.student).map((p) => `${p.student}|${p.assignment}`))
-  const weekKeys = new Set(week.filter((p) => p.student).map((p) => `${p.student}|${p.assignment}`))
-  const filedToday = packets.filter((p) => p.complete && todayKeys.has(`${p.student}|${p.assignment}`)).length
-  const filedWeek = packets.filter((p) => p.complete && weekKeys.has(`${p.student}|${p.assignment}`)).length
-  const open = packets.filter((p) => !p.complete)
-  const oldestOpen = open.length ? Math.min(...open.map((p) => Date.parse(p.lastAt))) : null
-  const review = reviewCount()
-  const students = new Map(listStudents().map((s) => [s.code, s]))
-  const feed = recentPages(60).map((p) => decorate(p, students))
+// ---------- Scan: the piles as they arrive, and the loose pages ----------
+api.get('/scan', (_req, res) => {
+  const w = watcherStatus()
+  const piles = listPiles().map((pile) => {
+    const sheets = pileSheets(pile)
+    const rows = pagesOfPileOrOrigin(pile.id, pile.origin)
+    const codeAssignment = codeAssignmentOf(pile)
+    const arriving = pile.status === 'new' && pileArriving(pile.id)
+    return {
+      ...pile,
+      assignmentTitle: pile.assignment ? (getAssignment(pile.assignment)?.title ?? null) : null,
+      // the assignment the codes that read name, even before it exists: what "New assignment from these codes" offers
+      codeAssignment,
+      codeSetUp: !!codeAssignment && !!getAssignment(codeAssignment),
+      // a pile whose pages are still coming in: nothing can be named or settled yet
+      arriving,
+      pagesIn: rows.filter((p) => p.pile === pile.id).length,
+      filed: sheets.filter((x) => x.status === 'filed').length,
+      toCheck: pile.held.length,
+      // pages, not sheets: a jumbled pile sends pages loose one by one
+      looseFrom: rows.filter((p) => p.status === 'review' && p.pile !== pile.id).length,
+    }
+  })
   res.json({
-    feed,
-    stats: {
-      pagesToday: today.length,
-      packetsFiledToday: filedToday,
-      inReview: review,
-      incomplete: open.length,
-      oldestIncompleteMin: oldestOpen ? Math.round((Date.now() - oldestOpen) / 60000) : null,
-      pagesWeek: week.length,
-      packetsWeek: filedWeek,
-    },
-    outstanding: outstanding(),
-    noticing: latestNoticing(),
-    analysisOn: getSettings().hasKey,
+    status: { ...w, lastSeen: w.lastSeen ?? getMeta('lastSeen'), folder: path.basename(w.inbox) || w.inbox },
+    piles,
+    loose: loosePages().length,
   })
 })
 
-// The newest "worth noticing" line the class analysis wrote, with its assignment.
-function latestNoticing(): { text: string; at: string; assignment: string } | null {
-  let best: { text: string; at: string; assignment: string } | null = null
-  for (const row of metaWithPrefix('noticing:')) {
-    try {
-      const v = JSON.parse(row.value) as { text: string; at: string }
-      if (!best || v.at > best.at) best = { ...v, assignment: row.key.slice('noticing:'.length) }
-    } catch { /* an old value */ }
-  }
-  return best
-}
+// Everything that arrived, page by page: the newest 200.
+api.get('/scan/log', (_req, res) => {
+  const students = new Map(listStudents().map((s) => [s.code, s]))
+  res.json(recentPages(200).map((p) => decorate(p, students)))
+})
 
-function reviewCount() {
-  return reviewPages().length + stalePackets().length
+/** Pages waiting in review that are not part of any pile. */
+function loosePages(): Page[] {
+  return reviewPages().filter((p) => p.pile == null)
 }
 
 function decorate(p: ReturnType<typeof recentPages>[number], students: Map<string, Student>) {
   const s = p.student ? students.get(p.student) : undefined
   const packet = p.student && p.assignment ? getPacket(p.student, p.assignment) : undefined
   return { ...p, studentName: s?.name ?? null, packet: packet ?? null }
-}
-
-// Assignments with students who have not turned anything in yet, newest first.
-function outstanding() {
-  const out: Array<{ assignment: Assignment; missing: Student[]; total: number }> = []
-  for (const a of listAssignments().filter((a) => !a.waiting).slice(0, 6)) {
-    const roster = listStudents(a.klass).filter((s) => s.active && (a.grade == null || s.grade == null || s.grade === a.grade))
-    const have = new Set(packetsForAssignment(a.code).map((p) => p.student))
-    out.push({ assignment: a, missing: roster.filter((s) => !have.has(s.code)), total: roster.length })
-  }
-  return out
 }
 
 // ---------- Students ----------
@@ -153,13 +136,58 @@ api.get('/students/:code', (req, res) => {
 
 // ---------- Assignments ----------
 api.get('/assignments', (_req, res) => {
+  const piles = listPiles(500)
+  const inPile = reviewPages().filter((p) => p.reason === 'in pile')
+  const jobs = queueStatus().jobs.filter((j) => j.state === 'waiting' || j.state === 'running')
   const rows = listAssignments().map((a) => {
     const packets = packetsForAssignment(a.code)
-    const roster = listStudents(a.klass).filter((s) => s.active && (a.grade == null || s.grade == null || s.grade === a.grade))
-    return { ...a, turnedIn: packets.length, complete: packets.filter((p) => p.complete && !p.closedIncomplete).length, roster: roster.length }
+    const roster = rosterFor(a)
+    const have = new Set(packets.map((p) => p.student))
+    const open = openPilesFor(a.code, piles)
+    const scanning = open.length > 0 || inPile.some((p) => p.assignment === a.code)
+    const stage = stageOf(packets, scanning, jobs.some((j) => j.assignment === a.code))
+    return {
+      ...a, turnedIn: packets.length, complete: packets.filter((p) => p.complete && !p.closedIncomplete).length, roster: roster.length,
+      stage,
+      toCheck: open.filter((p) => p.status === 'checking').reduce((n, p) => n + p.held.length, 0),
+      missingSide: packets.filter(shortASide).length,
+      analysed: packets.filter((p) => p.analysedAt || p.note).length,
+      notIn: roster.filter((s) => !have.has(s.code)).map((s) => s.name),
+      noticing: noticingFor(a.code),
+      pileId: open[0]?.id ?? null,
+      feedbackPrintedOn: packets.reduce<string | null>((m, p) => (p.feedbackPrintedAt && (!m || p.feedbackPrintedAt > m) ? p.feedbackPrintedAt : m), null),
+    }
   })
   res.json(rows)
 })
+
+type Stage = 'scanning' | 'ready' | 'analysing' | 'analysed' | 'done'
+/** Where an assignment is: a pile for it still open, analysis running, analysed and not printed, printed, or ready to analyse. */
+function stageOf(packets: Packet[], scanning: boolean, analysing: boolean): Stage {
+  // nothing turned in yet: still being scanned, not ready to analyse
+  if (scanning || packets.length === 0) return 'scanning'
+  if (analysing) return 'analysing'
+  if (packets.length && packets.every((p) => p.analysedAt || p.note) && !packets.some((p) => p.feedbackPrintedAt)) return 'analysed'
+  if (packets.length && packets.every((p) => p.feedbackPrintedAt)) return 'done'
+  return 'ready'
+}
+
+/** A packet with some sides filed and some still to come: what "analyse them as they are" closes. One with none filed is not in. */
+function shortASide(p: Packet): boolean {
+  return !p.complete && p.sides > 0
+}
+
+/** The "worth noticing" line the class analysis wrote for an assignment. */
+function noticingFor(code: string): { text: string; at: string } | null {
+  const raw = getMeta(`noticing:${code}`)
+  if (!raw) return null
+  try {
+    const v = JSON.parse(raw) as { text: string; at: string }
+    return { text: v.text, at: v.at }
+  } catch {
+    return null // an old value
+  }
+}
 
 api.post('/assignments', (req, res) => {
   const b = req.body ?? {}
@@ -177,6 +205,17 @@ api.post('/assignments', (req, res) => {
   refreshPacketsFor(code)
   // a rubric seed from Worksheet Studio (the worksheet's objective and skill) fills a rubric the teacher has not written yet
   if (b.rubric && typeof b.rubric === 'object' && !before?.rubric) setAssignmentRubric(code, JSON.stringify(cleanRubric(b.rubric)))
+  // a pile waiting with codes for this assignment is settled the moment it is created (an edit leaves an undone pile alone)
+  if (!before) {
+    for (const pile of listPiles(500)) {
+      if (pile.status !== 'new' || pileArriving(pile.id) || codeAssignmentOf(pile) !== code) continue
+      try {
+        settle(pile.id)
+      } catch (err) {
+        console.warn(`settling pile ${pile.id} for new assignment ${code}: ${(err as Error).message}`)
+      }
+    }
+  }
   res.json(getAssignment(code))
 })
 
@@ -346,7 +385,7 @@ api.post('/pages/:id/unfile', (req, res) => {
 api.delete('/assignments/:code', (req, res) => {
   const code = req.params.code.toUpperCase()
   if (!getAssignment(code)) return res.status(404).json({ error: 'no such assignment' })
-  if (!deleteAssignment(code)) return res.status(409).json({ error: `${code} has scanned work filed under it, so it stays. Pages can be skipped or refiled from Review first.` })
+  if (!deleteAssignment(code)) return res.status(409).json({ error: `${code} has scanned work filed under it, so it stays. Its pages can be sent to loose pages and refiled first.` })
   res.json({ deleted: code })
 })
 
@@ -366,7 +405,7 @@ api.get('/assignments/:code', (req, res) => {
   const average = scored.length ? scored.reduce((t, p) => t + (p.score ?? 0), 0) / scored.length : null
   const noticingRaw = getMeta(`noticing:${a.code}`)
   const rubric = parseRubric(a.rubric)
-  res.json({ assignment: a, expected: expectedFor(a), printed: printedSidesFor(a), students, inReview, average, scoredCount: scored.length, noticing: noticingRaw ? JSON.parse(noticingRaw) : null, analysisOn: getSettings().hasKey, domains: domainsFor(rubric), allDomains: domainList(), rubric, ratings: domainsForAssignment(a.code), anchors: anchorsForAssignment(a.code), agreement: agreementFor(a.code) })
+  res.json({ assignment: a, pileId: openPilesFor(a.code)[0]?.id ?? null, expected: expectedFor(a), printed: printedSidesFor(a), students, inReview, average, scoredCount: scored.length, noticing: noticingRaw ? JSON.parse(noticingRaw) : null, analysisOn: getSettings().hasKey, domains: domainsFor(rubric), allDomains: domainList(), rubric, ratings: domainsForAssignment(a.code), anchors: anchorsForAssignment(a.code), agreement: agreementFor(a.code) })
 })
 
 // How Claude's scores and ratings compare with the teacher's own, for one assignment or across them all.
@@ -437,33 +476,16 @@ api.get('/compare', (req, res) => {
 
 // ---------- Review ----------
 api.get('/review', (_req, res) => {
-  const students = new Map(listStudents().map((s) => [s.code, s]))
-  const items: ReviewItem[] = reviewPages().map((p) => ({
+  // loose pages only: a pile's pages are checked on the pile's own screen
+  const items: ReviewItem[] = loosePages().map((p) => ({
     kind: 'page', pageId: p.id, student: p.student, assignment: p.assignment, scannedAt: p.scannedAt,
     problem: p.reason ?? 'Code not readable', guesses: guessesFor(p), waitingSince: p.scannedAt,
   }))
-  for (const pk of stalePackets()) {
-    const a = getAssignment(pk.assignment)
-    const have = new Set(packetPages(pk.student, pk.assignment).map((p) => `${p.page}${p.side}`))
-    const missing = a ? sidesFor(a).filter((e) => !have.has(`${e.page}${e.side}`)) : []
-    items.push({
-      kind: 'packet', pageId: null, student: pk.student, assignment: pk.assignment, scannedAt: pk.lastAt,
-      problem: `Packet incomplete after ${waitedFor(pk.lastAt)}; ${missing.map((m) => sideLabel(m.page, m.side)).join(' and ')} never arrived`,
-      guesses: [{ rank: 1, student: pk.student, studentName: students.get(pk.student)?.name ?? pk.student, assignment: pk.assignment, page: null, side: null, why: `File as ${pk.sides} of ${pk.expected}.` }],
-      waitingSince: pk.lastAt,
-    })
-  }
   items.sort((x, y) => x.waitingSince.localeCompare(y.waitingSince))
   const pages = Object.fromEntries(items.filter((i) => i.pageId).map((i) => [i.pageId!, getPage(i.pageId!)]))
   res.json({ items, pages, assignments: listAssignments(), filedThisWeek: filedFromReviewThisWeek(), autoThisWeek: autoFiledThisWeek() })
 })
 
-function waitedFor(since: string) {
-  const h = Math.round((Date.now() - Date.parse(since)) / 3600000)
-  if (h < 48) return `${h} hour${h === 1 ? '' : 's'}`
-  const d = Math.round(h / 24)
-  return `${d} days`
-}
 function filedFromReviewThisWeek() {
   return pagesSince(new Date(Date.now() - 7 * 86400_000).toISOString()).filter((p) => p.filedFrom === 'review').length
 }
@@ -513,20 +535,14 @@ api.post('/review/:id/skip', (req, res) => {
   }
 })
 
-// An assignment the codes name but nobody set up: made from the waiting pages, which are then filed.
-api.post('/review/setup-assignment', (req, res) => {
-  const b = req.body ?? {}
-  if (!b.code) return res.status(400).json({ error: 'the assignment code is required' })
-  try {
-    res.json(setupAssignmentFromReview(String(b.code), { title: b.title ?? null, klass: b.klass ?? null, grade: b.grade == null || b.grade === '' ? null : Number(b.grade) }))
-  } catch (err) {
-    res.status(400).json({ error: (err as Error).message })
-  }
-})
-
-// Every packet that stopped arriving, filed as it is.
-api.post('/review/packets/close-all', (_req, res) => {
-  res.json({ closed: closeStalePackets() })
+// Packets still short a side, filed as they are in one go (all of them, or one assignment's): the
+// sides that came stay filed, and a side that turns up later still joins.
+api.post('/review/packets/close-all', (req, res) => {
+  const only = typeof req.body?.assignment === 'string' && req.body.assignment ? String(req.body.assignment).toUpperCase() : null
+  const open = openPackets().filter((p) => shortASide(p) && (!only || p.assignment === only))
+  for (const p of open) closePacketIncomplete(p.student, p.assignment)
+  if (open.length) broadcast('review', { closedPackets: open.length })
+  res.json({ closed: open.length })
 })
 
 api.post('/review/packet/:assignment/:student/close', (req, res) => {
@@ -601,9 +617,15 @@ api.post('/analyse/packet/:assignment/:student', (req, res) => {
 api.post('/analyse/assignment/:code', (req, res) => {
   const code = req.params.code.toUpperCase()
   if (!getAssignment(code)) return res.status(404).json({ error: 'no such assignment' })
-  if (!getSettings().hasKey) return res.status(400).json({ error: 'No API key yet. Add one in Settings.' })
+  // "analyse them as they are": packets still short a side are closed first, with or without a key
+  let closed = 0
+  if (req.body?.closeIncomplete) {
+    for (const p of openPackets().filter((p) => p.assignment === code && shortASide(p))) { closePacketIncomplete(p.student, p.assignment); closed++ }
+    if (closed) broadcast('review', { closedPackets: closed })
+  }
+  if (!getSettings().hasKey) return res.status(400).json({ error: 'No API key yet. Add one in Settings.', closed })
   const n = enqueueAssignment(code, !!req.body?.force)
-  res.json({ queued: n, ...queueStatus() })
+  res.json({ queued: n, closed, ...queueStatus() })
 })
 api.post('/analyse/class/:code', (req, res) => {
   const code = req.params.code.toUpperCase()
@@ -671,6 +693,8 @@ print.get('/feedback/:assignment{/:student}', (req, res) => {
   const packets = packetsForAssignment(a.code).filter((p) => (p.feedback || parseCorrections(p.corrections).length) && (!only || p.student === only))
   const rows = packets.map((p) => ({ p, s: getStudent(p.student) })).sort((x, y) => (x.s?.name ?? '').localeCompare(y.s?.name ?? ''))
   if (!rows.length) return res.status(404).send(only ? 'No feedback written for this student yet.' : 'No feedback written for this assignment yet.')
+  // the whole class's slips opened for printing: the assignment is done
+  if (!only) markFeedbackPrinted(a.code, new Date().toISOString())
   const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
   const first = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim()
   const slips = rows.map(({ p, s }) => `<section class="slip">

@@ -4,8 +4,8 @@ import { useFetch } from '../api'
 import { ViewerProvider } from './Viewer'
 
 export default function Shell() {
-  const { data } = useFetch<{ items: unknown[] }>('/api/review')
-  const count = data?.items.length ?? 0
+  const { data } = useFetch<{ piles: Array<{ status: string }>; loose: number }>('/api/scan')
+  const count = (data?.piles.filter((p) => p.status === 'new' || p.status === 'checking').length ?? 0) + (data?.loose ?? 0)
   const nav = useNavigate()
   const [q, setQ] = useState('')
   // the running program against the files on disk: after an update they differ until the scanner is restarted
@@ -22,13 +22,11 @@ export default function Shell() {
       <header className="top">
         <NavLink to="/" className="serif brand">Student Work</NavLink>
         <nav>
-          <NavLink to="/" end className={({ isActive }) => (isActive ? 'on' : '')}>Today</NavLink>
-          <NavLink to="/students" className={({ isActive }) => (isActive ? 'on' : '')}>Students</NavLink>
-          <NavLink to="/assignments" className={({ isActive }) => (isActive ? 'on' : '')}>Assignments</NavLink>
-          <NavLink to="/compare" className={({ isActive }) => (isActive ? 'on' : '')}>Compare</NavLink>
-          <NavLink to="/review" className={({ isActive }) => (isActive ? 'on' : '')}>
-            Review{count > 0 && <span className="badge">{count}</span>}
+          <NavLink to="/scan" className={({ isActive }) => (isActive ? 'on' : '')}>
+            Scan{count > 0 && <span className="badge">{count}</span>}
           </NavLink>
+          <NavLink to="/assignments" className={({ isActive }) => (isActive ? 'on' : '')}>Assignments</NavLink>
+          <NavLink to="/students" className={({ isActive }) => (isActive ? 'on' : '')}>Students</NavLink>
         </nav>
         <form
           style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}
