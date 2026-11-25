@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import Anthropic from '@anthropic-ai/sdk'
-import { causeChain, connectionMessage } from '../server/netErrors.js'
+import { authMessage, causeChain, cleanKey, connectionMessage } from '../server/netErrors.js'
 
 // What the SDK throws when fetch fails: APIConnectionError → TypeError('fetch failed') → the socket's error.
 function failed(code: string, message = code) {
@@ -43,5 +43,27 @@ describe('connection errors say what actually went wrong', () => {
   it('falls back to the deepest message it has', () => {
     const m = connectionMessage(new Anthropic.APIConnectionError({ cause: new TypeError('fetch failed', { cause: new Error('something odd') }) }))
     expect(m).toContain('something odd')
+  })
+})
+
+describe('a rejected API key', () => {
+  it('cleans what was pasted around a key', () => {
+    expect(cleanKey('  "sk-ant-api03-abc\n def"  ')).toBe('sk-ant-api03-abcdef')
+    expect(cleanKey("'sk-ant-api03-abc'")).toBe('sk-ant-api03-abc')
+    expect(cleanKey('ANTHROPIC_API_KEY=sk-ant-api03-abc')).toBe('sk-ant-api03-abc')
+    expect(cleanKey('')).toBe('')
+  })
+
+  it('says when what was saved is not an API key at all', () => {
+    expect(authMessage('sk-ant-admin01-xyz')).toMatch(/admin key/)
+    expect(authMessage('sk-ant-oat01-xyz')).toMatch(/not an API key/)
+    expect(authMessage('hello')).toMatch(/start with sk-ant-api/)
+  })
+
+  it('shows the ends of a real-looking key so it can be matched in the Console', () => {
+    const m = authMessage('sk-ant-api03-ABCDEFGHIJKLMNOP-wxyz')
+    expect(m).toContain('sk-ant-api…wxyz')
+    expect(m).toMatch(/console\.anthropic\.com/)
+    expect(m).not.toContain('ABCDEFGHIJ')
   })
 })

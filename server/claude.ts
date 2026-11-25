@@ -18,7 +18,7 @@ import { annotationsForPage, anchorsForAssignment, domainsForAssignment } from '
 import { annotationsText, pageJpeg } from './marks.js'
 import { abs } from './pipeline.js'
 import { broadcast } from './events.js'
-import { causeChain, connectionMessage } from './netErrors.js'
+import { authMessage, causeChain, cleanKey, connectionMessage } from './netErrors.js'
 import { sideLabel } from './codes.js'
 import { parseExpect, parseProgress, parseRubric, SKILL_LEVEL_LABEL, type Assignment, type Packet, type Rubric, type Student } from '../shared/types.js'
 import { anchorsText, rubricText, type AnchorForPrompt } from './analysis.js'
@@ -66,13 +66,13 @@ export function getSettings(): Settings {
 export function saveSettings(s: { apiKey?: string | null; model?: string; auto?: boolean; context?: string; domains?: string[]; skills?: string }) {
   if (s.domains !== undefined) setMeta('domains', s.domains.map((d) => d.trim()).filter(Boolean).join('\n'))
   if (s.skills !== undefined) saveSkillVocabulary(s.skills)
-  if (s.apiKey !== undefined) setMeta('anthropicApiKey', s.apiKey?.trim() ?? '')
+  if (s.apiKey !== undefined) setMeta('anthropicApiKey', cleanKey(s.apiKey ?? ''))
   if (s.model !== undefined) setMeta('model', s.model.trim() || DEFAULT_MODEL)
   if (s.auto !== undefined) setMeta('autoAnalyse', s.auto ? '1' : '0')
   if (s.context !== undefined) setMeta('teacherContext', s.context)
 }
 function apiKey(): string | null {
-  return getMeta('anthropicApiKey') || process.env.ANTHROPIC_API_KEY || null
+  return cleanKey(getMeta('anthropicApiKey') ?? '') || cleanKey(process.env.ANTHROPIC_API_KEY ?? '') || null
 }
 function client(): Anthropic {
   const key = apiKey()
@@ -291,7 +291,7 @@ export async function testKey(): Promise<{ ok: boolean; model: string; message: 
 }
 
 export function describe(err: unknown): string {
-  if (err instanceof Anthropic.AuthenticationError) return 'The API key was rejected. Check it in Settings.'
+  if (err instanceof Anthropic.AuthenticationError) return authMessage(apiKey())
   if (err instanceof Anthropic.PermissionDeniedError) return 'This key is not allowed to use that model.'
   if (err instanceof Anthropic.NotFoundError) return 'That model name was not found. Check the model in Settings.'
   if (err instanceof Anthropic.RateLimitError) return 'Rate limited by the API; it will be tried again shortly.'
