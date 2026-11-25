@@ -18,6 +18,7 @@ import { annotationsForPage, anchorsForAssignment, domainsForAssignment } from '
 import { annotationsText, pageJpeg } from './marks.js'
 import { abs } from './pipeline.js'
 import { broadcast } from './events.js'
+import { causeChain, connectionMessage } from './netErrors.js'
 import { sideLabel } from './codes.js'
 import { parseExpect, parseProgress, parseRubric, SKILL_LEVEL_LABEL, type Assignment, type Packet, type Rubric, type Student } from '../shared/types.js'
 import { anchorsText, rubricText, type AnchorForPrompt } from './analysis.js'
@@ -294,7 +295,7 @@ export function describe(err: unknown): string {
   if (err instanceof Anthropic.PermissionDeniedError) return 'This key is not allowed to use that model.'
   if (err instanceof Anthropic.NotFoundError) return 'That model name was not found. Check the model in Settings.'
   if (err instanceof Anthropic.RateLimitError) return 'Rate limited by the API; it will be tried again shortly.'
-  if (err instanceof Anthropic.APIConnectionError) return 'Could not reach the Claude API. Is the computer online?'
+  if (err instanceof Anthropic.APIConnectionError) return connectionMessage(err)
   if (err instanceof Anthropic.APIError) return `Claude API error ${err.status}: ${err.message}`
   return err instanceof Error ? err.message : String(err)
 }
@@ -345,6 +346,7 @@ async function drain() {
       job.state = 'failed'
       job.error = describe(err)
       console.error('[analysis] failed', job.assignment, job.student ?? 'class', job.error)
+      if (err instanceof Anthropic.APIConnectionError) console.error('[analysis]   cause:', causeChain(err).map((c) => c.code ?? c.message).join(' <- '))
       if (err instanceof Anthropic.RateLimitError) await new Promise((r) => setTimeout(r, 20_000))
     }
     queue.shift()

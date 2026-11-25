@@ -7,6 +7,10 @@ cd /d "%~dp0.."
 rem The folder the scanner saves into. Change this line if yours is elsewhere.
 if not defined SWS_INBOX set "SWS_INBOX=%USERPROFILE%\Desktop\scan"
 
+rem Trust the certificates Windows trusts, so a school firewall or antivirus that
+rem checks secure connections does not stop the Claude analysis. Older Node ignores it.
+set "NODE_USE_SYSTEM_CA=1"
+
 if not exist "dist\server\index.js" (
   echo Building for the first time...
   call npm run build
