@@ -5,8 +5,13 @@ import { makeApp } from './app.js'
 import { onPacketComplete } from './claude.js'
 import { setOnPacketComplete } from './pipeline.js'
 import { renormaliseSkills } from './skills.js'
+import { trustSystemCertificates } from './systemCerts.js'
 
 export { BUILD } from './app.js'
+
+// Before anything reaches the network: a school firewall or antivirus that checks
+// secure connections is trusted by Windows, so it is trusted here too.
+trustSystemCertificates()
 
 ensureDirs()
 openDb()
